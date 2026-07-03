@@ -1,0 +1,79 @@
+---
+name: context-parachute
+description: Auto-eject session handoff. When context fills up (or on demand), write cross-agent continuation artifacts — HANDOFF.md, ready-to-paste continue prompts, and an AGENTS.md block — so any agent (Codex, Gemini, OpenCode, Cursor, or a fresh Claude session) can pick up the work with full context. Use when the context-parachute watcher injects a CONTEXT-PARACHUTE directive, when the user asks to hand off / eject / parachute the session, or before a /clear on a long task.
+---
+
+# context-parachute
+
+You are the payload of the context-parachute system. The watcher hook has decided
+context is running low (or the user invoked you manually). Your job: capture the
+session's working state into repo-local, **agent-agnostic** artifacts **now**,
+while context is still fresh — then continue the user's task.
+
+Write everything in **English** (persisted artifacts are English regardless of the
+chat language). Be concrete: real file paths, real decisions, real failed
+approaches. A vague handoff is worse than none.
+
+## Config
+
+Read `output_dir` (default `.parachute`), `update_agents_md` (default `true`), and
+`create_agents_md` (default `false`) from `.parachute/config.json` (cwd) or
+`~/.claude/parachute.json` if present. Otherwise use the defaults.
+
+## Artifacts to write
+
+### 1. `HANDOFF.md` (repo root)
+
+**Read the existing file first** if present, then create or update it. Sections:
+
+- **Goal** — what we're trying to accomplish
+- **Current Progress** — what's been done so far, concretely
+- **What Worked** — approaches that succeeded
+- **What Didn't Work** — approaches that failed, so the next agent does not repeat them
+- **Decisions Made** — each decision **and why**
+- **Files Changed** — path + one-line what/why per file
+- **Next Steps** — clear, ordered action items
+
+### 2. `<output_dir>/continue.md` — generic continuation prompt
+
+A **self-contained, ready-to-paste** prompt that works in any tool (Cursor, aider,
+Gemini, ChatGPT, OpenCode, a fresh Claude session). It must:
+
+- Open with a **"verify state before trusting this document"** preamble: the reader
+  should run `git status`, `git diff`, and re-read key files before acting, because
+  the repo may have moved on since this was written.
+- Point to `HANDOFF.md` as the source of truth for context.
+- Summarize the immediate next step so the reader can start without opening anything.
+
+### 3. `<output_dir>/continue-claude.md` — fresh Claude Code session prompt
+
+Same intent, tuned for Claude Code. Recommend the reader run `/clear` and paste this
+prompt — a clean session with a focused prompt beats a compacted context in both
+quality and token cost. Reference `HANDOFF.md` and the current next step.
+
+### 4. AGENTS.md block (repo root) — only if `update_agents_md`
+
+Codex and OpenCode read `AGENTS.md` natively at startup, so this gives zero-paste
+pickup. Maintain a marker-delimited block:
+
+```
+<!-- parachute:begin -->
+## Session handoff (context-parachute)
+
+<current handoff summary — goal + immediate next step + pointer to HANDOFF.md>
+<!-- parachute:end -->
+```
+
+- If both markers exist exactly once: replace the content **between** them, leaving
+  the rest of `AGENTS.md` untouched.
+- If markers are missing, malformed, or duplicated: **append a fresh block** at the
+  end and note it — never edit around ambiguous markers and risk corrupting the file.
+- If `AGENTS.md` does not exist: create it **only if** `create_agents_md` is true;
+  otherwise skip this artifact.
+
+## After writing
+
+Tell the user, in one line each: which files you wrote/updated, and that they can
+resume from `HANDOFF.md` (or paste `continue.md` / `continue-claude.md` into a fresh
+session). Then **continue the user's original task** — do not stop just because you
+parachuted.

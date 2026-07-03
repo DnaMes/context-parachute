@@ -1,0 +1,7 @@
+{
+  "threshold_percent": 80,
+  "context_window": 200000,
+  "update_agents_md": true,
+  "create_agents_md": false,
+  "output_dir": ".parachute"
+}

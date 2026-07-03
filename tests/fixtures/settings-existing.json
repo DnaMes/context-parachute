@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "node /home/user/existing-router.js", "timeout": 3 } ] }
+    ],
+    "PreCompact": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "[ -d .beads ] && bd prime; true" } ] }
+    ]
+  }
+}

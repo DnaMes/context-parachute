@@ -1,0 +1,11 @@
+# Runtime / local
+*.fired
+.parachute/emergency.md
+
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store
+
+# Test scratch
+tests/tmp/
