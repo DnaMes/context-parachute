@@ -74,9 +74,13 @@ MARKER="${MARKER_DIR}/${SESSION_ID}.fired"
 # Tail-read only the last 500 lines — do not parse the whole transcript.
 # -R + fromjson? makes each line tolerant: a corrupt/truncated JSONL line
 # becomes null and is skipped rather than aborting the whole jq stream.
-USAGE_LINE="$(tac "$TRANSCRIPT" 2>/dev/null | head -n 500 \
+# Portable reverse-read: take the LAST matching line from the last 500, instead
+# of reversing the file to take the first. Avoids GNU-only and BSD-only reverse
+# tools, so the watcher runs on Linux and macOS alike. Verified byte-identical
+# output to previous reverse approach on all fixtures.
+USAGE_LINE="$(tail -n 500 "$TRANSCRIPT" 2>/dev/null \
     | jq -c -R 'fromjson? | select(.type=="assistant" and (.isSidechain != true)) | .message.usage' 2>/dev/null \
-    | head -n 1 || true)"
+    | tail -n 1 || true)"
 [[ -z "$USAGE_LINE" ]] && { warn "no assistant usage found in transcript tail"; exit 0; }
 
 TOKENS="$(printf '%s' "$USAGE_LINE" | jq -r \

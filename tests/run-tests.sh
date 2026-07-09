@@ -66,6 +66,9 @@ out="$(run_watch sidechain-mixed.jsonl s-side)"
 out="$(run_watch corrupt.jsonl s-corrupt)"
 [[ "$out" == *"at 85%"* ]] && ok "corrupt lines skipped, valid line used" || bad "corrupt lines skipped (got: ${out:0:60})"
 
+# portability: the shipped watcher must not depend on tac (GNU-only) or tail -r (BSD-only)
+grep -qE '\btac\b|tail -r' "$WATCH" && bad "watcher uses non-portable reverse-read (tac/tail -r)" || ok "watcher reverse-read is portable"
+
 # ---------------------------------------------------------------------------
 section "Fail-open"
 
