@@ -70,6 +70,29 @@ out="$(run_watch corrupt.jsonl s-corrupt)"
 grep -qE '\btac\b|tail -r' "$WATCH" && bad "watcher uses non-portable reverse-read (tac/tail -r)" || ok "watcher reverse-read is portable"
 
 # ---------------------------------------------------------------------------
+section "1M context_window override (B2)"
+
+# at-80.jsonl = 160000 tokens: 80% of the 200000 default (fires), but only 16%
+# of a 1M window (must stay silent). Per-project .parachute/config.json override.
+override_dir="$(mktemp -d)"
+mkdir -p "${override_dir}/.parachute"
+cat > "${override_dir}/.parachute/config.json" <<'EOF'
+{"context_window": 1000000}
+EOF
+input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-1m-override"}')"
+out="$(cd "$override_dir" && TMPDIR="$RUN_TMP" printf '%s' "$input" | TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null)"
+[[ -z "$out" ]] && ok "1M override: 160k/1M stays silent" || bad "1M override: 160k/1M stays silent (got: ${out:0:60})"
+rm -rf "$override_dir"
+
+# default window (200000, no override) + observed tokens already exceed it -> WARN to
+# stderr, trigger decision unchanged (still fires, since 250000/200000 = 125% >= 80%).
+warn_fixture="${RUN_TMP}/warn-exceeds.jsonl"
+printf '%s\n' '{"type":"assistant","isSidechain":false,"message":{"role":"assistant","usage":{"input_tokens":250000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}' > "$warn_fixture"
+input="$(jq -nc --arg t "$warn_fixture" '{transcript_path:$t, session_id:"s-warn-exceeds"}')"
+err="$(TMPDIR="$RUN_TMP" printf '%s' "$input" | TMPDIR="$RUN_TMP" bash "$WATCH" 2>&1 >/dev/null)"
+[[ "$err" == *"WARN"*"exceed"* ]] && ok "default window + tokens exceed it -> WARN on stderr" || bad "default window + tokens exceed it -> WARN on stderr (got: ${err:0:80})"
+
+# ---------------------------------------------------------------------------
 section "Fail-open"
 
 # empty transcript file -> no usage -> silent, exit 0

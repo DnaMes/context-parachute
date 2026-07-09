@@ -11,6 +11,26 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-09
+
+Bugfix release: a confirmed live misfire on 1M-context sessions, plus a
+portability fix so the watcher runs on macOS/BSD.
+
+### Fixed
+
+- **1M-context misfire.** `context_window` defaults to `200000`; on a 1M-context
+  session (e.g. Opus `[1m]`) the parachute fired at ~16% actual fill instead of
+  80%. No reliable auto-detection signal exists (model string lacks `[1m]`;
+  inferring from observed tokens is circular at the threshold), so the fix is a
+  documented per-project `context_window: 1000000` override
+  (`.parachute/config.json`), plus a one-line `WARN:` to stderr when the default
+  window is left in place and observed tokens already exceed it. The trigger
+  decision itself is unchanged — this is a visibility nudge, not new logic.
+- **macOS/BSD portability.** `parachute-watch.sh` used `tac` (GNU-only) to
+  reverse-read the transcript tail. Replaced with `tail -n 500 … | tail -n 1`
+  (take the last match instead of reversing to take the first) — POSIX-portable,
+  same 500-line window, byte-identical result on all fixtures.
+
 ## [1.0.0] - 2026-07-09
 
 First tagged release. The system was already built and in daily use; this release

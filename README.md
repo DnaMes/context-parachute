@@ -125,6 +125,27 @@ defaults (never a silent failure).
 | `create_agents_md` | `false` | Create `AGENTS.md` if it doesn't exist yet. |
 | `output_dir` | `.parachute` | Where `continue*.md` and `emergency.md` go. |
 
+### 1M-context sessions
+
+`context_window` defaults to `200000` — correct for standard Sonnet/Opus sessions.
+**If you run a 1M-context session (e.g. Opus `[1m]`), you must set
+`context_window: 1000000`** — the watcher cannot reliably detect the real window
+from the transcript (the model string doesn't carry it, and inferring it from
+observed tokens is circular at the trigger threshold). Left at the default on a
+1M session, the parachute fires at ~16% actual fill instead of 80%.
+
+Set it globally if you run 1M by default (`~/.claude/parachute.json`), or
+per-project via `.parachute/config.json`:
+
+```json
+{
+  "context_window": 1000000
+}
+```
+
+If the default is left in place and observed tokens exceed it, the watcher emits
+a one-line `WARN:` to stderr as a nudge — it does not change the trigger decision.
+
 ## Comparison to existing tools
 
 As of 2026-07-03, no other tool combines an **automatic** context-threshold trigger

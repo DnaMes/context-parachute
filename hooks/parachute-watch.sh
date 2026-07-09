@@ -90,6 +90,15 @@ TOKENS="$(printf '%s' "$USAGE_LINE" | jq -r \
 
 PERCENT=$(( TOKENS * 100 / WINDOW ))
 
+# --- guard: default window silently wrong on a 1M-context session -----------
+# WINDOW==200000 means no context_window override was configured (default or
+# explicit). If observed tokens already exceed that, the session is almost
+# certainly running a larger window (e.g. Opus [1m]) and PERCENT is bogus.
+# Warn, but never change the trigger decision below.
+if [[ "$WINDOW" -eq 200000 ]] && (( TOKENS > WINDOW )); then
+    warn "observed tokens ($TOKENS) exceed configured context_window ($WINDOW); if this is a 1M session set context_window: 1000000"
+fi
+
 # --- decide -----------------------------------------------------------------
 if (( PERCENT >= THRESHOLD )); then
     mkdir -p "$MARKER_DIR" 2>/dev/null || { warn "cannot create marker dir"; exit 0; }
