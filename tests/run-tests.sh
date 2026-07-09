@@ -173,6 +173,29 @@ jq -e '.hooks.UserPromptSubmit | any(.[].hooks[]?; .command == "node /home/user/
 rm -rf "$inst_scratch"
 
 # ---------------------------------------------------------------------------
+section "Version consistency (VERSION == CHANGELOG == tag)"
+
+VERSION_FILE="${REPO_DIR}/VERSION"
+if [[ -r "$VERSION_FILE" ]]; then
+    ver="$(head -n1 "$VERSION_FILE" | tr -d '[:space:]')"
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && ok "VERSION is semver ($ver)" || bad "VERSION is semver (got: $ver)"
+
+    # top CHANGELOG release heading: first "## [x.y.z]" line, skipping [Unreleased]
+    chlog="$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "${REPO_DIR}/CHANGELOG.md" 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+    [[ "$chlog" == "$ver" ]] && ok "CHANGELOG top matches VERSION" || bad "CHANGELOG top ($chlog) matches VERSION ($ver)"
+
+    # latest git tag (if any tags exist yet) must match
+    tag="$(cd "$REPO_DIR" && git tag -l 'v*' --sort=-v:refname 2>/dev/null | head -n1 | sed 's/^v//')"
+    if [[ -n "$tag" ]]; then
+        [[ "$tag" == "$ver" ]] && ok "latest git tag matches VERSION" || bad "git tag ($tag) matches VERSION ($ver)"
+    else
+        printf '  \033[33mSKIP\033[0m no git tag yet (tag before release)\n'
+    fi
+else
+    bad "VERSION file present"
+fi
+
+# ---------------------------------------------------------------------------
 section "shellcheck"
 
 if command -v shellcheck >/dev/null 2>&1; then

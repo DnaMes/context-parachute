@@ -170,6 +170,15 @@ Run the test suite:
 ./tests/run-tests.sh
 ```
 
+## Versioning
+
+[SemVer](https://semver.org/). The canonical version is the [`VERSION`](VERSION)
+file at the repo root; artifacts are stamped with it for provenance. To cut a release:
+
+1. Bump [`VERSION`](VERSION).
+2. Move the `[Unreleased]` notes into a new dated section in [`CHANGELOG.md`](CHANGELOG.md).
+3. `git tag -a "v$(cat VERSION)" -m "context-parachute v$(cat VERSION)"` — the test suite asserts VERSION, CHANGELOG top, and tag all match.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

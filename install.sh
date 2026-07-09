@@ -16,6 +16,11 @@ PRECOMPACT_CMD="bash ${REPO_DIR}/hooks/parachute-precompact.sh"
 err() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 info() { printf '%s\n' "$1"; }
 
+VERSION="unknown"
+[[ -r "${REPO_DIR}/VERSION" ]] && VERSION="$(head -n1 "${REPO_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+[[ -n "$VERSION" ]] || VERSION="unknown"
+info "context-parachute v${VERSION} — installer"
+
 # --- hard dependency check --------------------------------------------------
 command -v jq >/dev/null 2>&1 || err "jq is required but not found. Install jq and re-run."
 
