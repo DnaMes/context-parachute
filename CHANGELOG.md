@@ -11,6 +11,21 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-21
+
+Bugfix release: a confirmed live Read-before-Write race on repos with a prior
+`/parachute` run.
+
+### Fixed
+
+- **Read-before-Write race on re-run.** On a second `/parachute` in the same
+  repo, `continue.md`/`continue-claude.md` already exist; the skill would Read
+  and Write them in the same batched tool-call turn, and the harness's
+  read-tracking doesn't carry into a same-turn Write, so the Write errored
+  with "File has not been read yet." `skill/SKILL.md` now requires Read and
+  Write of the same file to happen in separate, sequential steps, per file,
+  immediately before that file's own Write.
+
 ## [1.0.1] - 2026-07-09
 
 Bugfix release: a confirmed live misfire on 1M-context sessions, plus a
