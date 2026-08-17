@@ -34,3 +34,20 @@ nur `bash` + `jq`, zwei fail-open Hooks und ein Skill.
 - Keine Secrets committen (.env, *.pem, *.key)
 - Hooks muessen fail-open bleiben (nie eine Session blockieren)
 - Keine force-pushes auf main
+
+<!-- BEGIN obsidian-link (generated — do not edit inside this block) -->
+## Knowledge base
+
+Documentation for this project lives in the Obsidian vault — that is the
+place to look things up, and the place to write lasting notes:
+
+- **This project:** `~/ObsidianVault/2-Projects/ai-stack/context-parachute/`
+- **Where does what live:** `~/ObsidianVault/Maps/BIBLIOTHEK.md`
+- **Start here (human):** `~/ObsidianVault/START.md`
+- **Homelab wiki:** https://wiki.home.erdlabs.com
+
+Session logs are filed automatically to `Projects/ai-stack/context-parachute/Sessions/` via the
+`.obsidian-doc` marker in this directory — you do not need to write them.
+
+Conventions before editing the vault: skill `obsidian-keeper`.
+<!-- END obsidian-link -->
