@@ -26,7 +26,7 @@ nur `bash` + `jq`, zwei fail-open Hooks und ein Skill.
 - NEXT.md fuer naechsten Schritt (lokal, gitignored)
 - LOCAL.md fuer persoenliche Notizen (lokal, gitignored)
 - Code-Docs in `docs/` (git-tracked)
-- Planung/Notizen in ObsidianVault/Projects/lab/context-parachute/
+- Planung/Notizen in ObsidianVault/2-Projects/ai-stack/context-parachute/
 - Public Repo: github.com/DnaMes/context-parachute — Englisch, keine internen Pfade leaken
 
 ## Dont
