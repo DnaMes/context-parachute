@@ -1,3 +1,7 @@
+> **STALE** — last updated 2026-07-21, but the repo has commits up to 2026-08-25 (35 days newer).
+> Read this as history, not as the current state. Flagged 2026-08-25 by the
+> repo-compliance audit; content deliberately left untouched.
+
 # HANDOFF — context-parachute
 
 ## Goal
