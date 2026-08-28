@@ -133,8 +133,11 @@ CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): STOP AND COMPACT NOW.
 Every further turn re-reads ~${COST_PER_TURN} tokens of cached context — roughly
 ${HOURLY_EST}M tokens/hour at a normal pace, from the shared plan limit, no matter how
 small the next question is. Parallel sessions multiply this.
-DO THIS BEFORE ANY OTHER WORK: run \`/compact focus on: <current task>\`, or finish
-and close this session. Do not start new file reads, greps, or subagents first.
+DO THIS BEFORE ANY OTHER WORK: run \`/compact focus on: <current task>\`. Prefer
+compacting over closing-and-reopening: a fresh start re-pays ~80k tokens of system
+prompt, and measured 2026-08-29 daily volume tracks session COUNT, not per-session
+cost. Close only if the work is genuinely finished. Do not start new file reads,
+greps, or subagents first.
 EOF
     elif (( stage >= 70 )); then
         cat <<EOF
