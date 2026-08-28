@@ -43,6 +43,11 @@ SESSION_ID="$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // empty' 2>/dev/nu
 THRESHOLD=80
 WINDOW=200000
 OUTPUT_DIR=".parachute"
+# Escalating advisory stages, checked before the parachute threshold.
+# WHY: a single one-shot warning at 75% did not stop four parallel sessions
+# reaching 67-99% of a 1M window on 2026-08-29, together burning ~1B tokens
+# per hour in cache reads alone. Each stage fires once per session.
+WARN_STAGES="50 70 85"
 
 load_config() {
     local file="$1"
@@ -66,7 +71,11 @@ load_config "$(pwd)/.parachute/config.json"
 # --- fired-marker: one shot per session -------------------------------------
 MARKER_DIR="${TMPDIR:-/tmp}/context-parachute"
 MARKER="${MARKER_DIR}/${SESSION_ID}.fired"
-[[ -e "$MARKER" ]] && exit 0
+# NOTE: the parachute marker stays one-shot (the handoff is written once), but
+# the advisory stages below have their own per-stage markers, so a session that
+# ignores the first warning is warned again at every later stage.
+PARACHUTE_FIRED=0
+[[ -e "$MARKER" ]] && PARACHUTE_FIRED=1
 
 # --- compute context % from last main-chain assistant usage -----------------
 # Sum input_tokens + cache_creation_input_tokens + cache_read_input_tokens of
@@ -99,8 +108,52 @@ if [[ "$WINDOW" -eq 200000 ]] && (( TOKENS > WINDOW )); then
     warn "observed tokens ($TOKENS) exceed configured context_window ($WINDOW); if this is a 1M session set context_window: 1000000"
 fi
 
+# --- advisory stages --------------------------------------------------------
+# Cost framing matters more than the percentage: every request re-reads the
+# whole context as cache, so a 900k-token session costs ~900k tokens PER TURN
+# no matter how small the question. That is the number that drains a plan.
+COST_PER_TURN="$TOKENS"
+HOURLY_EST=$(( COST_PER_TURN * 60 / 1000000 ))   # ~M tokens/hour at ~1 turn/min
+
+# Pick the HIGHEST stage reached, not the first — iterating low-to-high and
+# breaking on the first match would always print the mildest message.
+STAGE=0
+for s in $WARN_STAGES; do (( PERCENT >= s && s > STAGE )) && STAGE=$s; done
+
+for stage in $STAGE; do
+    (( stage > 0 )) || continue
+    stage_marker="${MARKER_DIR}/${SESSION_ID}.warn${stage}"
+    [[ -e "$stage_marker" ]] && continue
+    mkdir -p "$MARKER_DIR" 2>/dev/null || break
+    : > "$stage_marker" 2>/dev/null || true
+
+    if (( stage >= 85 )); then
+        cat <<EOF
+CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): STOP AND COMPACT NOW.
+Every further turn re-reads ~${COST_PER_TURN} tokens of cached context — roughly
+${HOURLY_EST}M tokens/hour at a normal pace, from the shared plan limit, no matter how
+small the next question is. Parallel sessions multiply this.
+DO THIS BEFORE ANY OTHER WORK: run \`/compact focus on: <current task>\`, or finish
+and close this session. Do not start new file reads, greps, or subagents first.
+EOF
+    elif (( stage >= 70 )); then
+        cat <<EOF
+CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): each turn now costs ~${COST_PER_TURN} tokens
+(~${HOURLY_EST}M/hour). Plan to \`/compact focus on: <task>\` at the next natural break,
+and offload heavy reads/greps/reviews to \`delegate\` instead of doing them here.
+EOF
+    else
+        cat <<EOF
+CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): context is growing; each turn re-reads
+~${COST_PER_TURN} tokens. Prefer \`delegate --type explore|bulk|review\` for large
+sweeps so their output never enters this context.
+EOF
+    fi
+    break
+done
+
 # --- decide -----------------------------------------------------------------
-if (( PERCENT >= THRESHOLD )); then
+if (( PERCENT >= THRESHOLD )) && (( PARACHUTE_FIRED == 0 )); then
     mkdir -p "$MARKER_DIR" 2>/dev/null || { warn "cannot create marker dir"; exit 0; }
     : > "$MARKER" 2>/dev/null || warn "cannot write marker: $MARKER"
     cat <<EOF
