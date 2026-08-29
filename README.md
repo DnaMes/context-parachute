@@ -65,6 +65,25 @@ repo-local continuation artifacts.**
         dump plus a bash-only git snapshot before auto-compaction runs.
 ```
 
+### Escalating context-cost warnings
+
+Below the parachute threshold, the watcher also prints advisory nudges at three
+fixed stages — 50%, 70%, and 85% of the window — each with its own per-stage
+marker, so ignoring one doesn't buy silence for the rest of the session (unlike
+the parachute directive itself, which is still strictly one-shot). If a session
+is only observed once already past several stages, the **highest** stage
+reached is what prints, not the mildest one.
+
+Every message states the actual per-turn cost: since each request re-reads the
+whole context as cache, a 900k-token session costs ~900k tokens on every turn,
+however small the question.
+
+| Stage | Wording | Points at |
+|---|---|---|
+| 50% | context is growing | `delegate --type explore\|bulk\|review` for large sweeps |
+| 70% | plan to wrap up soon | `/compact focus on: <task>` at the next natural break |
+| 85% | **STOP AND COMPACT NOW**, before any other tool call | `/compact`, explicitly preferred over closing and reopening the session — a restart re-pays ~80k tokens of system prompt, and daily token volume tracks session *count*, not per-session cost |
+
 ### Artifacts written
 
 | Artifact | Location | For |

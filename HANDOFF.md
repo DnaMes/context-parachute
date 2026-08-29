@@ -1,82 +1,87 @@
-> **STALE** — last updated 2026-07-21, but the repo has commits up to 2026-08-25 (35 days newer).
-> Read this as history, not as the current state. Flagged 2026-08-25 by the
-> repo-compliance audit; content deliberately left untouched.
-
 # HANDOFF — context-parachute
 
 ## Goal
 
-Iterate context-parachute past v1.0.0: ship versioning (done), bugfixes
-(v1.0.1 tagged, v1.0.2 in progress) and a feature (v1.1.0) designed via
-brainstorming.
+Iterate context-parachute past v1.0.2: ship the escalating-warnings feature
+that was already in production use (measured 2026-08-29 token-burn incident),
+audit the repo for doc/test drift, and cut the release.
 
 ## Current Progress
 
-- **v1.0.0 released** — SemVer versioning, CHANGELOG, artifact provenance
-  (`5e19785`, tagged `v1.0.0`, pushed). VERSION file = single source of truth;
-  both hooks read it fail-open and stamp generated artifacts.
-- **v1.0.1 shipped** — tagged `v1.0.1` locally, both bugfixes from the spec
-  (B2 1M misfire warning, C2 macOS/BSD portability). Not yet pushed.
-- **v1.0.2 in progress** — Read-before-Write race found live, same-session:
-  on a repo with a prior `/parachute` run, Write of `continue.md`/
-  `continue-claude.md` errored "File has not been read yet" even though the
-  skill had just Read both. Root cause: Read+Write of the same file landed in
-  the same batched tool-call turn — harness read-tracking doesn't carry into
-  a same-turn Write. `skill/SKILL.md` now mandates Read and Write of each
-  pre-existing artifact happen in separate sequential steps, per file. VERSION
-  → `1.0.2`, CHANGELOG entry added. Full suite: 38 passed, 0 failed.
-  - C2 (portability): `parachute-watch.sh` reverse-read now `tail -n 500 | tail -1`
-    instead of GNU-only `tac` — one code path, works on Linux and macOS/BSD
-    (`1738388`).
-  - B2 (1M misfire, honest form): README documents the per-project
-    `context_window: 1000000` override for 1M-context sessions; watcher emits a
-    one-line `WARN:` to stderr when the default 200000 window is left in place
-    and observed tokens already exceed it. Trigger decision itself unchanged —
-    visibility nudge, not new logic. No auto-detection (rejected, see Decisions).
-  - VERSION → `1.0.1`, CHANGELOG entry added. Two new tests (1M-override stays
-    silent at 16%; WARN fires on stderr when default window is exceeded). Full
-    suite: **38 passed, 0 failed**. Staged, not yet committed/tagged/pushed.
-- **Global Stop-hook fixed** (`~/bin/claude-hook-stop.sh`) — `extract_handoff_section`
-  now falls back across schemas (`Current Task` || `Goal` || `Current Progress`)
-  so parachute-format HANDOFF.md feeds the Obsidian session note. Backup at
-  `~/bin/claude-hook-stop.sh.bak.20260709164404`. Local script, not committed.
-- **Design spec written & committed** (`dfe3ca8`):
-  `docs/superpowers/specs/2026-07-09-v1.0.1-and-v1.1.0-design.md`.
+- **v1.1.0 shipped.** Two commits landed directly on `main` without a version
+  bump or test run (`6b04e74` feat: escalating 50/70/85% context-cost
+  advisories; `71429cb` fix: prefer `/compact` over close-and-reopen at 85%).
+  This session's audit found and closed the gap:
+  - **Real regression found:** `tests/run-tests.sh` was never re-run after
+    those two commits. 6 of 32 tests failed — not from a code bug in the new
+    feature, but from a pre-existing test-isolation gap this repo's own
+    HANDOFF.md had flagged as a risk on 2026-08-28 and left unfixed: `run_watch`
+    isolated `TMPDIR` but never `HOME`, so it silently read this machine's real
+    `~/.claude/parachute.json` (`context_window: 1000000`, `threshold_percent: 65`
+    — this machine runs 1M sessions). Fixed by isolating `HOME` to a scratch
+    dir for every watcher/precompact invocation, matching the pattern already
+    used for the installer tests.
+  - Two assertions (`at-79`, `cache-heavy`) needed updating, not reverting: 79%
+    is inside the new 70% advisory band, so "fully silent" stopped being the
+    correct expectation once the feature shipped as designed.
+  - Added 3 new fixtures (`at-50`, `at-70`, `at-90`) and 9 assertions covering
+    the escalation stages themselves: mildest/mid/hard-stop wording, per-stage
+    marker suppression (a stage doesn't nag twice), and highest-stage-wins
+    (a session observed once already at 90% gets the 85% message, not 50%'s).
+  - README gained an "Escalating context-cost warnings" section — the feature
+    had zero user-facing docs before this pass.
+  - CHANGELOG `[Unreleased]` had stayed empty across both commits; backfilled
+    as `[1.1.0]`. `VERSION` → `1.1.0`.
+  - Full suite: **50 passed, 0 failed**. Not yet tagged/pushed — ask before
+    pushing (shared state).
+- **v1.0.2 was already shipped and pushed** (Read-before-Write race fix,
+  tagged `v1.0.2`, confirmed via `git log origin/main..main` = empty).
 
 ## Next Steps
 
-1. **Finish v1.0.2 shipping:** commit the staged files
-   (`VERSION CHANGELOG.md HANDOFF.md skill/SKILL.md`),
-   tag `v1.0.2` locally (consistency test requires tag == VERSION), then **ask
-   before pushing** — push is shared state, not implied by "continue." v1.0.1
-   also still unpushed — both tags go together.
-2. **v1.1.0 (feature):** reset fired-marker on `PostCompact` to re-arm the
-   parachute. **GATED:** probe PostCompact stdin for `session_id` first (fallbacks:
-   cwd-key or age-based reset if absent). VERSION → 1.1.0.
-3. **Follow-up, not blocking:** `tests/run-tests.sh`'s `run_watch` reads the
-   ambient `~/.claude/parachute.json` global config, not just fixtures. If this
-   machine's global config is ever set to `context_window: 1000000` (the README
-   now recommends this for 1M users, and this machine runs 1M sessions), the
-   threshold/WARN tests will break against real ambient state. Fix: `HOME`-isolate
-   `run_watch` in the test runner. Flagged by advisor review, not yet done.
+1. **Tag and push v1.1.0.** `git tag v1.1.0` on current HEAD, then **ask before
+   pushing**.
+2. **Remove the stray backup file** `hooks/parachute-watch.sh.bak-20260828-195311`
+   (untracked, editor-generated, not a documented backup — safe to delete once
+   confirmed the working tree matches what's committed).
+3. **Next planned feature (not yet started, not version-numbered):** reset the
+   parachute fired-marker on `PostCompact` so it re-arms after an auto-compact
+   instead of staying silent for the rest of the session. **GATED:** probe
+   PostCompact stdin for `session_id` first (fallbacks: cwd-key or age-based
+   reset if absent). Design spec already exists:
+   `docs/superpowers/specs/2026-07-09-v1.0.1-and-v1.1.0-design.md` — note its
+   "v1.1.0" label now refers to this *unbuilt* feature, not the escalating
+   warnings that shipped under that version number instead; re-read before
+   resuming to avoid confusing the two.
+4. **Enforce "tests before commit" going forward.** The regression this
+   session found happened because two real commits shipped without running
+   `tests/run-tests.sh` first. Consider a pre-commit hook (`.githooks/pre-commit`
+   already exists in this repo — check whether it runs the suite, and if not,
+   whether it should).
 
 ## What Worked / Decisions
 
-- The v1.0.0 misfire is **live-confirmed**: the watcher fired this very session at
-  "83% of 200000" while the real window is 1M (~30% actual). Exactly the bug the
-  spec targets — proof by dogfooding.
-- 1M window auto-detection **rejected**: model string lacks `[1m]`, empirical
-  inference is circular at the 160k threshold, no structural transcript signal.
-  Honest config override beats a heuristic that's wrong at the trigger point.
-- v1.0.0 tag was applied directly on linear history, no PR/merge — v1.0.1 follows
-  the same flow (tag on this branch's HEAD after commit).
+- Root-caused the 6 test failures with `bash -x` tracing rather than guessing —
+  confirmed in one pass that all 6 reduced to the same ambient-config leak, not
+  six separate bugs.
+- Chose to update the two stale assertions (`at-79`, `cache-heavy`) rather than
+  treat the new advisory output as a regression to suppress — the feature is
+  working as designed at 79%; the test's expectation was what was outdated.
+- Kept the parachute directive itself strictly one-shot (unchanged) while
+  making the advisory stages repeatable-until-acknowledged — these serve
+  different purposes (one handoff-trigger vs. ongoing cost awareness) and
+  conflating their marker semantics would have been wrong.
 
 ## Files Changed (this arc)
 
-- `VERSION`, `CHANGELOG.md`, `HANDOFF.md` — new in v1.0.0.
-- `hooks/*.sh`, `skill/SKILL.md`, `install.sh`, `README.md`, `tests/run-tests.sh` — version + provenance (v1.0.0), then B2/C2 fixes + 2 new tests (v1.0.1).
-- `skill/SKILL.md` — Read-before-Write sequencing rule added (v1.0.2).
-- `docs/superpowers/specs/2026-07-09-v1.0.1-and-v1.1.0-design.md` — spec; v1.0.1 done, v1.1.0 next.
+- `hooks/parachute-watch.sh` — escalating 50/70/85% advisories + compact-vs-close
+  wording fix (already committed: `6b04e74`, `71429cb`).
+- `tests/run-tests.sh` — HOME isolation for `run_watch`/`run_precompact`; updated
+  `at-79`/`cache-heavy` assertions; new escalation-stage test section.
+- `tests/fixtures/at-50.jsonl`, `at-70.jsonl`, `at-90.jsonl` — new fixtures.
+- `README.md` — new "Escalating context-cost warnings" section.
+- `CHANGELOG.md`, `VERSION` — `1.1.0` entry and bump.
+- `HANDOFF.md` — this file, brought current (was stale since 2026-07-21).
 
 ---
-_generated by context-parachute v1.0.2 (updated by hand, dogfooding the format)_
+_generated by context-parachute v1.1.0 (updated by hand, dogfooding the format)_

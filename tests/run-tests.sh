@@ -19,7 +19,16 @@ bad()  { FAIL=$((FAIL+1)); FAILED_NAMES+=("$1"); printf '  \033[31mFAIL\033[0m %
 
 # Isolated per-run TMPDIR so fired-markers never collide with the real machine.
 RUN_TMP="$(mktemp -d)"
-trap 'rm -rf "$RUN_TMP"' EXIT
+# Isolated per-run HOME (no ~/.claude/parachute.json) so an ambient global
+# config on the machine running the suite (e.g. context_window: 1000000) can
+# never change what a fixture's expected percentage/threshold works out to.
+# Without this, run_watch reads the REAL ~/.claude/parachute.json via
+# load_config, and every threshold/WARN assertion below silently depends on
+# whatever this machine happens to have configured. Predicted in HANDOFF.md
+# 2026-08-28, confirmed live 2026-08-29 (6 failures on a machine configured
+# for 1M-context sessions).
+RUN_HOME="$(mktemp -d)"
+trap 'rm -rf "$RUN_TMP" "$RUN_HOME"' EXIT
 
 # Run the watcher against a fixture with a given session id. Echoes stdout.
 # Usage: run_watch <fixture> <session_id> [extra_json_fields]
@@ -27,7 +36,7 @@ run_watch() {
     local fixture="$1" sid="$2"
     local input
     input="$(jq -nc --arg t "${FIXTURES}/${fixture}" --arg s "$sid" '{transcript_path:$t, session_id:$s}')"
-    TMPDIR="$RUN_TMP" printf '%s' "$input" | TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null
+    TMPDIR="$RUN_TMP" HOME="$RUN_HOME" printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null
 }
 
 section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
@@ -43,9 +52,13 @@ out="$(run_watch at-80.jsonl s-80)"
 out="$(run_watch at-80.jsonl s-80)"
 [[ -z "$out" ]] && ok "second call is silent (marker)" || bad "second call is silent (marker)"
 
+# 79% is below the 80% parachute threshold but inside the 70% advisory band,
+# so a CONTEXT-BUDGET nudge is expected (added by the escalating-warnings
+# feature) while the parachute directive itself must not fire.
 out="$(run_watch at-79.jsonl s-79)"
-[[ -z "$out" ]] && ok "79% is silent" || bad "79% is silent"
-[[ -e "${RUN_TMP}/context-parachute/s-79.fired" ]] && bad "79% must NOT write marker" || ok "79% writes no marker"
+[[ "$out" != *"CONTEXT-PARACHUTE"* ]] && ok "79% does not fire parachute directive" || bad "79% does not fire parachute directive"
+[[ "$out" == *"CONTEXT-BUDGET"* ]] && ok "79% fires advisory warning" || bad "79% fires advisory warning (got: ${out:0:60})"
+[[ -e "${RUN_TMP}/context-parachute/s-79.fired" ]] && bad "79% must NOT write parachute marker" || ok "79% writes no parachute marker"
 
 # ---------------------------------------------------------------------------
 section "Token-sum correctness"
@@ -54,9 +67,11 @@ section "Token-sum correctness"
 out="$(run_watch normal.jsonl s-normal)"
 [[ "$out" == *"at 80%"* ]] && ok "normal -> 80%" || bad "normal -> 80% (got: ${out:0:60})"
 
-# cache-heavy sums to 158000 = 79% -> silent
+# cache-heavy sums to 158000 = 79% -> no parachute directive, but inside the
+# 70% advisory band so a CONTEXT-BUDGET nudge is expected.
 out="$(run_watch cache-heavy.jsonl s-cache)"
-[[ -z "$out" ]] && ok "cache-heavy -> 79% silent" || bad "cache-heavy -> 79% silent (got: ${out:0:60})"
+[[ "$out" != *"CONTEXT-PARACHUTE"* ]] && ok "cache-heavy -> 79% no parachute directive" || bad "cache-heavy -> 79% no parachute directive (got: ${out:0:60})"
+[[ "$out" == *"CONTEXT-BUDGET"* ]] && ok "cache-heavy -> 79% fires advisory" || bad "cache-heavy -> 79% fires advisory (got: ${out:0:60})"
 
 # sidechain line must be ignored: real usage = 20000 = 10% -> silent
 out="$(run_watch sidechain-mixed.jsonl s-side)"
@@ -80,7 +95,7 @@ cat > "${override_dir}/.parachute/config.json" <<'EOF'
 {"context_window": 1000000}
 EOF
 input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-1m-override"}')"
-out="$(cd "$override_dir" && TMPDIR="$RUN_TMP" printf '%s' "$input" | TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null)"
+out="$(cd "$override_dir" && TMPDIR="$RUN_TMP" HOME="$RUN_HOME" printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
 [[ -z "$out" ]] && ok "1M override: 160k/1M stays silent" || bad "1M override: 160k/1M stays silent (got: ${out:0:60})"
 rm -rf "$override_dir"
 
@@ -89,8 +104,38 @@ rm -rf "$override_dir"
 warn_fixture="${RUN_TMP}/warn-exceeds.jsonl"
 printf '%s\n' '{"type":"assistant","isSidechain":false,"message":{"role":"assistant","usage":{"input_tokens":250000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}' > "$warn_fixture"
 input="$(jq -nc --arg t "$warn_fixture" '{transcript_path:$t, session_id:"s-warn-exceeds"}')"
-err="$(TMPDIR="$RUN_TMP" printf '%s' "$input" | TMPDIR="$RUN_TMP" bash "$WATCH" 2>&1 >/dev/null)"
+err="$(TMPDIR="$RUN_TMP" HOME="$RUN_HOME" printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>&1 >/dev/null)"
 [[ "$err" == *"WARN"*"exceed"* ]] && ok "default window + tokens exceed it -> WARN on stderr" || bad "default window + tokens exceed it -> WARN on stderr (got: ${err:0:80})"
+
+# ---------------------------------------------------------------------------
+section "Escalating advisory stages (50/70/85%)"
+
+# 50%: mildest advisory, no compact/STOP wording, no parachute directive.
+out="$(run_watch at-50.jsonl s-stage50)"
+[[ "$out" == *"CONTEXT-BUDGET"* ]] && ok "50% fires mildest advisory" || bad "50% fires mildest advisory (got: ${out:0:60})"
+[[ "$out" != *"STOP AND COMPACT"* ]] && ok "50% does not use STOP wording" || bad "50% does not use STOP wording"
+[[ "$out" != *"CONTEXT-PARACHUTE"* ]] && ok "50% does not fire parachute directive" || bad "50% does not fire parachute directive"
+
+# same session again -> the 50% stage marker suppresses a repeat at the same stage.
+out="$(run_watch at-50.jsonl s-stage50)"
+[[ -z "$out" ]] && ok "50% stage is silent on repeat (per-stage marker)" || bad "50% stage is silent on repeat (got: ${out:0:60})"
+
+# 70%: mid-tier advisory, mentions compact + delegate, still below parachute threshold.
+out="$(run_watch at-70.jsonl s-stage70)"
+[[ "$out" == *"CONTEXT-BUDGET"* && "$out" == *"compact"* ]] && ok "70% fires mid-tier advisory" || bad "70% fires mid-tier advisory (got: ${out:0:80})"
+[[ "$out" != *"STOP AND COMPACT"* ]] && ok "70% does not use STOP wording" || bad "70% does not use STOP wording"
+
+# 85%: hard-stop wording, must prefer /compact over closing-and-reopening the session
+# (fixed in 71429cb — a restart re-pays ~80k tokens of system prompt).
+out="$(run_watch at-90.jsonl s-stage90)"
+[[ "$out" == *"STOP AND COMPACT NOW"* ]] && ok "90% fires hard-stop advisory" || bad "90% fires hard-stop advisory (got: ${out:0:80})"
+[[ "$out" == *"Prefer"*"compacting"* ]] && ok "90% prefers compact over close-and-reopen" || bad "90% prefers compact over close-and-reopen (got: ${out:0:120})"
+[[ "$out" != *"finish and close"* ]] && ok "90% does not offer close-session as equal alternative" || bad "90% does not offer close-session as equal alternative"
+
+# highest-stage-wins: a session observed only once, already at 90%, must get the
+# 85%-tier message, not the mildest one a naive low-to-high loop would print first.
+out="$(run_watch at-90.jsonl s-stage90-fresh)"
+[[ "$out" == *"STOP AND COMPACT NOW"* ]] && ok "highest stage wins on first observation" || bad "highest stage wins on first observation (got: ${out:0:80})"
 
 # ---------------------------------------------------------------------------
 section "Fail-open"
@@ -101,15 +146,15 @@ out="$(run_watch empty.jsonl s-empty)"; rc=$?
 
 # missing transcript path
 input="$(jq -nc '{transcript_path:"/nonexistent/x.jsonl", session_id:"s-miss"}')"
-out="$(TMPDIR="$RUN_TMP" printf '%s' "$input" | TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null)"; rc=$?
+out="$(TMPDIR="$RUN_TMP" HOME="$RUN_HOME" printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"; rc=$?
 [[ -z "$out" && $rc -eq 0 ]] && ok "missing transcript -> silent exit 0" || bad "missing transcript -> silent exit 0"
 
 # malformed stdin JSON
-out="$(TMPDIR="$RUN_TMP" printf '%s' 'not json {{{' | TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null)"; rc=$?
+out="$(TMPDIR="$RUN_TMP" HOME="$RUN_HOME" printf '%s' 'not json {{{' | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"; rc=$?
 [[ -z "$out" && $rc -eq 0 ]] && ok "malformed stdin -> silent exit 0" || bad "malformed stdin -> silent exit 0"
 
 # empty stdin
-out="$(printf '' | TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null)"; rc=$?
+out="$(printf '' | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"; rc=$?
 [[ -z "$out" && $rc -eq 0 ]] && ok "empty stdin -> silent exit 0" || bad "empty stdin -> silent exit 0"
 
 # no jq on PATH: symlink the core utils the hook needs (cat, tac, head, date,
@@ -120,13 +165,13 @@ for u in cat tac head date mkdir basename pwd; do
     p="$(command -v "$u" 2>/dev/null)" && ln -s "$p" "${nojq_dir}/${u}" 2>/dev/null
 done
 input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-nojq"}')"
-out="$(printf '%s' "$input" | PATH="$nojq_dir" TMPDIR="$RUN_TMP" /bin/bash "$WATCH" 2>/dev/null)"; rc=$?
+out="$(printf '%s' "$input" | PATH="$nojq_dir" TMPDIR="$RUN_TMP" HOME="$RUN_HOME" /bin/bash "$WATCH" 2>/dev/null)"; rc=$?
 [[ -z "$out" && $rc -eq 0 ]] && ok "no jq -> silent exit 0" || bad "no jq -> silent exit 0 (rc=$rc out=${out:0:40})"
 rm -rf "$nojq_dir"
 
 # unset TMPDIR (marker dir falls back to /tmp) — must still fire without error
 input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-notmp-'$$'"}')"
-out="$(env -u TMPDIR printf '%s' "$input" | env -u TMPDIR bash "$WATCH" 2>/dev/null)"; rc=$?
+out="$(env -u TMPDIR HOME="$RUN_HOME" printf '%s' "$input" | env -u TMPDIR HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"; rc=$?
 [[ "$out" == *"CONTEXT-PARACHUTE"* && $rc -eq 0 ]] && ok "unset TMPDIR -> still fires" || bad "unset TMPDIR -> still fires (rc=$rc)"
 rm -f "/tmp/context-parachute/s-notmp-$$.fired" 2>/dev/null
 
@@ -138,7 +183,7 @@ run_precompact() {
     local trigger="$1" sid="$2"
     local input
     input="$(jq -nc --arg tr "$trigger" --arg s "$sid" '{trigger:$tr, session_id:$s}')"
-    ( cd "$pc_scratch" && TMPDIR="$RUN_TMP" printf '%s' "$input" | TMPDIR="$RUN_TMP" bash "$PRECOMPACT" 2>/dev/null )
+    ( cd "$pc_scratch" && TMPDIR="$RUN_TMP" HOME="$RUN_HOME" printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$PRECOMPACT" 2>/dev/null )
 }
 
 # manual -> silent
