@@ -12,23 +12,13 @@ hooks and a skill.
 
 ## The problem
 
-Claude Code auto-compacts around 95% context. By then two things have already gone
-wrong:
+Long coding sessions accumulate state that is easy to lose during compaction
+or a tool switch: failed approaches, the next concrete action, and the reasons
+behind decisions. context-parachute asks the model to save those details while
+there is still room to do so, with a default threshold of 80%.
 
-1. **Compaction flattens the specifics.** Failed approaches, the exact next step,
-   the reason behind a decision: the details that made the session productive get
-   summarized away.
-2. **Quality has already degraded.** Most people hand off at **70–85%**, not 95%.
-
-Existing tools each solve half of this:
-
-- Auto-trigger handoff tools only go **Claude → Claude**. They can't hand off to
-  another agent.
-- Cross-agent handoff tools are **manual**. You have to remember to run them, which
-  is the first thing you drop when you're deep in a task.
-
-context-parachute is the intersection: **automatic trigger + cross-agent,
-repo-local continuation artifacts.**
+The handoff stays in ordinary project files that another agent can read. Hooks
+currently automate the Claude Code side; the skill and artifacts are portable.
 
 ## How it works
 
@@ -38,7 +28,7 @@ repo-local continuation artifacts.**
                           ▼
         ┌──────────────────────────────────┐
         │  parachute-watch.sh               │   UserPromptSubmit hook
-        │  reads transcript, computes % of  │   (fail-open, <50ms)
+        │  reads transcript, computes % of  │   (fail-open, bounded tail read)
         │  the 200k window from the last    │
         │  assistant message's token usage  │
         └──────────────────────────────────┘
@@ -59,30 +49,27 @@ repo-local continuation artifacts.**
 
         A fired-marker (one per session) prevents nagging.
 
-        Belt-and-suspenders: parachute-precompact.sh (PreCompact hook) catches
-        the case where the watcher never fired — a single huge turn, or a long
-        autonomous run with no user prompts — and injects an emergency brain
-        dump plus a bash-only git snapshot before auto-compaction runs.
+        Belt-and-suspenders: parachute-precompact.sh (PreCompact hook) saves
+        an atomic git snapshot before every automatic compaction, including
+        long autonomous runs. A watcher marker does not prove a handoff was
+        completed. PreCompact does not provide a model-writing turn.
 ```
 
-### Escalating context-cost warnings
+### Escalating context advisories
 
-Below the parachute threshold, the watcher also prints advisory nudges at three
-fixed stages — 50%, 70%, and 85% of the window — each with its own per-stage
-marker, so ignoring one doesn't buy silence for the rest of the session (unlike
-the parachute directive itself, which is still strictly one-shot). If a session
-is only observed once already past several stages, the **highest** stage
-reached is what prints, not the mildest one.
+The watcher reports the highest reached stage at 50%, 70%, or 85%, once per
+stage per session. These markers are separate from the one-shot handoff marker.
+The measurement is the latest usable main-chain input usage, including cache
+reads and cache creation; partial assistant records without valid usage are
+skipped. It is **not a billing estimate or subscription quota measurement**.
 
-Every message states the actual per-turn cost: since each request re-reads the
-whole context as cache, a 900k-token session costs ~900k tokens on every turn,
-however small the question.
+| Stage | Advice |
+|---|---|
+| 50% | Keep large reads focused and retain the next concrete step. |
+| 70% | Preserve state and plan compaction at a natural break. |
+| 85% | Save the handoff before compaction; continue the user's task. |
 
-| Stage | Wording | Points at |
-|---|---|---|
-| 50% | context is growing | `delegate --type explore\|bulk\|review` for large sweeps |
-| 70% | plan to wrap up soon | `/compact focus on: <task>` at the next natural break |
-| 85% | **STOP AND COMPACT NOW**, before any other tool call | `/compact`, explicitly preferred over closing and reopening the session — a restart re-pays ~80k tokens of system prompt, and daily token volume tracks session *count*, not per-session cost |
+Advisories do not authorize delegation or require the agent to stop working.
 
 ### Artifacts written
 
@@ -93,8 +80,8 @@ however small the question.
 | `continue-claude.md` | `.parachute/` | Fresh Claude Code session prompt. `/clear` + paste beats compaction on quality and tokens. |
 | `AGENTS.md` block | repo root | Marker-delimited block. Codex and OpenCode read `AGENTS.md` natively at startup → **zero-paste pickup.** |
 
-Artifacts are English and committed to the repo by default, so cross-device handoff
-via git comes for free. Nothing is auto-gitignored; you decide.
+Artifacts are English and remain ordinary project files. They are neither
+automatically committed nor gitignored; you decide what to track or share.
 
 ## Install
 
@@ -110,11 +97,18 @@ The installer:
 
 - **appends** its two hook blocks to `~/.claude/settings.json` (never clobbers
   your existing hooks), idempotent and safe to re-run;
-- backs up `settings.json` first (timestamped);
+- backs up `settings.json` first (unique names, including repeated operations);
 - symlinks the skill to `~/.claude/skills/context-parachute`;
-- seeds `~/.claude/parachute.json` with defaults.
+- seeds `~/.claude/parachute.json` with defaults;
+- quotes hook paths for the shell, migrates this clone's older registrations in
+  place, and bounds both hooks with a five-second timeout.
 
-Uninstall reverses everything except the config file:
+`CLAUDE_CONFIG_DIR` overrides `~/.claude` for settings, skills, and configuration.
+A conflicting skill directory or symlink is reported before settings change.
+Re-run the installer after upgrading to migrate registered commands and timeouts.
+
+Uninstall removes only this clone's commands and skill symlink, preserves other
+handlers even within the same block, and keeps the config file:
 
 ```bash
 ./uninstall.sh
@@ -122,9 +116,11 @@ Uninstall reverses everything except the config file:
 
 ## Configuration
 
-Global config at `~/.claude/parachute.json`, with an optional per-project override
-at `.parachute/config.json` (cwd). Invalid config → warn to stderr and fall back to
-defaults (never a silent failure).
+Global config at `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/parachute.json`, with an
+optional per-project override at `.parachute/config.json`. Hooks honor the event's
+`cwd`, falling back to the process directory when it is omitted. Values merge in
+order: defaults, global config, project override. Invalid config warns on stderr
+and leaves the previous valid values in place.
 
 ```json
 {
@@ -138,16 +134,16 @@ defaults (never a silent failure).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `threshold_percent` | `80` | Fire when context reaches this % of the window. |
-| `context_window` | `200000` | Token budget to measure against. |
+| `threshold_percent` | `80` | Integer 1–100: fire when context reaches this % of the window. |
+| `context_window` | `200000` | Positive integer up to 1,000,000,000: token budget to measure against. |
 | `update_agents_md` | `true` | Maintain the marker-delimited `AGENTS.md` block. |
 | `create_agents_md` | `false` | Create `AGENTS.md` if it doesn't exist yet. |
-| `output_dir` | `.parachute` | Where `continue*.md` and `emergency.md` go. |
+| `output_dir` | `.parachute` | Non-empty path without control characters for `continue*.md` and `emergency.md`. |
 
 ### 1M-context sessions
 
-`context_window` defaults to `200000` — correct for standard Sonnet/Opus sessions.
-**If you run a 1M-context session (e.g. Opus `[1m]`), you must set
+`context_window` defaults to `200000`. Set it to the actual window of your session.
+**If you run a 1M-context session, you must set
 `context_window: 1000000`** — the watcher cannot reliably detect the real window
 from the transcript (the model string doesn't carry it, and inferring it from
 observed tokens is circular at the trigger threshold). Left at the default on a
@@ -165,42 +161,32 @@ per-project via `.parachute/config.json`:
 If the default is left in place and observed tokens exceed it, the watcher emits
 a one-line `WARN:` to stderr as a nudge — it does not change the trigger decision.
 
-## Comparison to existing tools
+## Related tools
 
-As of 2026-07-03, no other tool combines an **automatic** context-threshold trigger
-with **cross-agent, repo-local** continuation artifacts.
+The landscape has changed since the original design. Similar projects now include
+statusline monitoring, startup recovery, host adapters, and handoff validation.
+See [the researched comparison](docs/RELATED-TOOLS.md) for primary sources and
+concrete ideas worth evaluating; no exclusivity claim is made.
 
-| Tool | Auto-trigger | Cross-agent handoff | Repo-local artifacts |
-|---|---|---|---|
-| **context-parachute** | ✅ 80% watcher + PreCompact fallback | ✅ generic + AGENTS.md + Claude-resume | ✅ HANDOFF.md + `.parachute/` |
-| f3kpclon/claude-code-handoff | ✅ | ❌ Claude→Claude | ✅ |
-| marcelkraemer89-web | ✅ | ❌ Claude→Claude | ✅ |
-| Sonovore (per-turn state) | ✅ (continuous) | ❌ Claude→Claude | ✅ |
-| willseltzer/claude-handoff (115★) | ❌ manual | ✅ | ✅ |
-| REMvisual/claude-handoff | ❌ manual | ✅ | ✅ |
-| agent-work-mem | ❌ manual | ✅ | ✅ |
-| OpenMOSS/claude-codex-handoff | ❌ manual | ✅ Claude↔Codex | ✅ |
-| mjbarefo/baton | ❌ manual | ✅ | ✅ |
-| Sting25 | ✅ | ❌ Claude→Claude | ✅ |
+## Limitations
 
-That intersection cell, auto-trigger plus cross-agent, is what context-parachute
-fills. (claude-mem discussion #1329 requests exactly this; Anthropic feature request
-#25689 for a native threshold hook was closed unimplemented.)
-
-## v1 limitations
-
-- **`UserPromptSubmit` only fires on user input.** During a fully autonomous run
-  with no prompts, the watcher can't run. The `PreCompact` fallback covers this:
-  on auto-compaction with no prior fire, it injects an emergency brain dump and
-  writes a `git status` / `diff --stat` / `log` snapshot to
-  `.parachute/emergency.md`. It covers the gap rather than preventing it, and nothing is lost.
-- No per-agent tailored prompts (`continue-codex.md`, etc.) in v1. The generic
-  prompt plus the native `AGENTS.md` block already cover Codex and OpenCode.
+- `UserPromptSubmit` only fires on user input. During autonomous work, the
+  PreCompact fallback saves git status, diff statistics, recent commits, and a
+  timestamp. It **cannot capture unwritten decisions or guarantee lossless
+  semantic recovery**. Its stdout is not a supported prompt-injection channel.
+  See the [Claude Code hook reference](https://code.claude.com/docs/en/hooks#precompact).
+- `emergency.md` is the latest automatic snapshot, replaced atomically. Concurrent
+  sessions in one directory can replace each other's snapshots; session-specific
+  history is not implemented.
+- Handoff/advisory markers remain one-shot per session, including after compaction.
+  A long session may therefore need a manual handoff later.
+- There is no native Codex/Gemini watcher or startup recovery hook in this repo.
+  The portable skill, generic prompt, and `AGENTS.md` block cover manual transfer.
 
 ## Design
 
-Full design rationale, verified platform constraints, and the decisions log live in
-[`docs/DESIGN.md`](docs/DESIGN.md).
+The historical rationale lives in [`docs/DESIGN.md`](docs/DESIGN.md). Current
+recovery guarantees are documented in [`docs/RELIABILITY.md`](docs/RELIABILITY.md).
 
 Hooks are pure `bash` + `jq`, `shellcheck`-clean, and **fail-open**: any internal
 error exits 0 and never blocks your session; it only logs a `WARN:` to stderr.
@@ -213,9 +199,14 @@ Run the test suite:
 ## Versioning
 
 [SemVer](https://semver.org/). The canonical version is the [`VERSION`](VERSION)
-file at the repo root; artifacts are stamped with it for provenance. To cut a release:
+file at the repo root. Hooks read that file relative to their installation. The
+portable skill carries the same version in `metadata.version`, so manual use in
+an unrelated project never reads that project's `VERSION` or emits `vunknown`.
+Legacy skills without metadata can use a concrete watcher version; otherwise they
+report `version unavailable`. Existing historical artifacts are not restamped.
+To cut a release:
 
-1. Bump [`VERSION`](VERSION).
+1. Bump [`VERSION`](VERSION) and `metadata.version` in [`skill/SKILL.md`](skill/SKILL.md).
 2. Move the `[Unreleased]` notes into a new dated section in [`CHANGELOG.md`](CHANGELOG.md).
 3. `git tag -a "v$(cat VERSION)" -m "context-parachute v$(cat VERSION)"` — the test suite asserts VERSION, CHANGELOG top, and tag all match.
 

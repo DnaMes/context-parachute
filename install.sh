@@ -7,11 +7,12 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETTINGS="${HOME}/.claude/settings.json"
-SKILL_LINK="${HOME}/.claude/skills/context-parachute"
-CONFIG_DEST="${HOME}/.claude/parachute.json"
-WATCH_CMD="bash ${REPO_DIR}/hooks/parachute-watch.sh"
-PRECOMPACT_CMD="bash ${REPO_DIR}/hooks/parachute-precompact.sh"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
+SETTINGS="${CLAUDE_DIR}/settings.json"
+SKILL_LINK="${CLAUDE_DIR}/skills/context-parachute"
+CONFIG_DEST="${CLAUDE_DIR}/parachute.json"
+LEGACY_WATCH_CMD="bash ${REPO_DIR}/hooks/parachute-watch.sh"
+LEGACY_PRECOMPACT_CMD="bash ${REPO_DIR}/hooks/parachute-precompact.sh"
 
 err() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 info() { printf '%s\n' "$1"; }
@@ -23,8 +24,18 @@ info "context-parachute v${VERSION} — installer"
 
 # --- hard dependency check --------------------------------------------------
 command -v jq >/dev/null 2>&1 || err "jq is required but not found. Install jq and re-run."
+# Claude passes command strings through sh -c: quote paths for that boundary.
+WATCH_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-watch.sh" | jq -Rrs @sh)"
+PRECOMPACT_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-precompact.sh" | jq -Rrs @sh)"
 
-mkdir -p "${HOME}/.claude/skills"
+# Fail before touching settings if another installation owns the skill path.
+if [[ -L "$SKILL_LINK" ]]; then
+    [[ "$(readlink "$SKILL_LINK")" == "${REPO_DIR}/skill" ]] || err "skill link points elsewhere: $SKILL_LINK"
+elif [[ -e "$SKILL_LINK" ]]; then
+    err "skill path already exists and is not this installation's symlink: $SKILL_LINK"
+fi
+
+mkdir -p "${CLAUDE_DIR}/skills"
 
 # --- settings.json: create if missing, then back up -------------------------
 if [[ ! -f "$SETTINGS" ]]; then
@@ -33,7 +44,7 @@ if [[ ! -f "$SETTINGS" ]]; then
 fi
 jq empty "$SETTINGS" 2>/dev/null || err "existing ${SETTINGS} is not valid JSON; aborting."
 
-BACKUP="${SETTINGS}.bak.$(date +%Y%m%d%H%M%S)"
+BACKUP="$(mktemp "${SETTINGS}.bak.XXXXXXXX")"
 cp "$SETTINGS" "$BACKUP"
 info "Backed up settings.json -> ${BACKUP}"
 
@@ -43,7 +54,7 @@ info "Backed up settings.json -> ${BACKUP}"
 append_hook() {
     local event="$1" cmd="$2" timeout="$3"
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(mktemp "${SETTINGS}.tmp.XXXXXXXX")"
     jq \
         --arg event "$event" --arg cmd "$cmd" --argjson timeout "$timeout" '
         .hooks //= {} |
@@ -57,19 +68,25 @@ append_hook() {
     mv "$tmp" "$SETTINGS"
 }
 
-if jq -e --arg cmd "$WATCH_CMD" '.hooks.UserPromptSubmit // [] | any(.[].hooks[]?; .command == $cmd)' "$SETTINGS" >/dev/null 2>&1; then
-    info "UserPromptSubmit watcher already registered — skipping."
-else
-    append_hook "UserPromptSubmit" "$WATCH_CMD" 5
-    info "Registered UserPromptSubmit watcher (timeout 5s)."
-fi
-
-if jq -e --arg cmd "$PRECOMPACT_CMD" '.hooks.PreCompact // [] | any(.[].hooks[]?; .command == $cmd)' "$SETTINGS" >/dev/null 2>&1; then
-    info "PreCompact fallback already registered — skipping."
-else
-    append_hook "PreCompact" "$PRECOMPACT_CMD" 0
-    info "Registered PreCompact fallback."
-fi
+# Migrate the exact commands written by older releases before appending.
+# Sibling handlers and block settings are preserved.
+tmp="$(mktemp "${SETTINGS}.tmp.XXXXXXXX")"
+jq --arg w "$WATCH_CMD" --arg p "$PRECOMPACT_CMD" \
+    --arg lw "$LEGACY_WATCH_CMD" --arg lp "$LEGACY_PRECOMPACT_CMD" '
+    if .hooks then
+        .hooks |= with_entries(.value |= map(
+            if .hooks then .hooks |= map(
+                if .command == $lw or .command == $w then .command = $w | .timeout = 5
+                elif .command == $lp or .command == $p then .command = $p | .timeout = 5
+                else . end
+            ) else . end
+        ))
+    else . end
+' "$SETTINGS" > "$tmp" || err "jq failed while migrating hook commands"
+mv "$tmp" "$SETTINGS"
+append_hook "UserPromptSubmit" "$WATCH_CMD" 5
+append_hook "PreCompact" "$PRECOMPACT_CMD" 5
+info "Registered watcher and snapshot hooks (timeout 5s, idempotent)."
 
 jq empty "$SETTINGS" 2>/dev/null || err "settings.json became invalid after edit — restore from ${BACKUP}"
 

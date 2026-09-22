@@ -8,6 +8,17 @@ audit the repo for doc/test drift, and cut the release.
 
 ## Current Progress
 
+- **Current host is P15, not E14.** `hostname` and `/etc/hostname` both report
+  `p15`. This maintenance pass traces and removes current-host E14 drift from
+  runtime metadata and active documentation while preserving historical E14
+  evidence and repository paths.
+
+- **P15 drift cleanup is complete for the active surfaces.** Claude telemetry,
+  Spotify identity, systemd metadata, browser bookmark, Yazi/Hypr comments,
+  P15-facing ai-stack docs, and the 1Password wrapper now use P15 or an
+  explicitly documented legacy fallback. Validation: 72 context-parachute tests
+  passed; JSON, systemd units, shell syntax, and Python syntax passed.
+
 - **v1.1.0 shipped.** Two commits landed directly on `main` without a version
   bump or test run (`6b04e74` feat: escalating 50/70/85% context-cost
   advisories; `71429cb` fix: prefer `/compact` over close-and-reopen at 85%).
@@ -38,6 +49,10 @@ audit the repo for doc/test drift, and cut the release.
   tagged `v1.0.2`, confirmed via `git log origin/main..main` = empty).
 
 ## Next Steps
+
+0. **Keep P15 drift cleanup bounded.** Do not rewrite dated audits, migration
+   history, retired E14 paths, or the existing service-account identifier unless
+   a deliberate credential rotation is requested.
 
 1. **Tag and push v1.1.0.** `git tag v1.1.0` on current HEAD, then **ask before
    pushing**.

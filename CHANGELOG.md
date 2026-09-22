@@ -11,6 +11,31 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+### Fixed
+
+- Manual/exported skills now carry `metadata.version` instead of reading an
+  unrelated working project's `VERSION`; prevents missing or incorrect handoff
+  provenance. Tests require the bundled version to match the canonical release.
+- Partial assistant records without usable usage no longer hide the latest valid
+  context measurement. Unsafe session identifiers and invalid config values are
+  rejected with fail-open warnings; hooks honor the event's working directory.
+- Every automatic PreCompact saves an atomic mechanical snapshot, even after the
+  watcher fires. A fired marker never proved that a semantic handoff completed.
+  Removed the unsupported PreCompact model prompt and corresponding guarantee.
+- Installer quotes paths, migrates legacy registrations without duplicating them,
+  applies five-second timeouts, honors `CLAUDE_CONFIG_DIR`, and refuses conflicting
+  skill paths before editing settings. Unique backups cannot collide in a second.
+- Uninstall preserves unrelated handlers sharing a hook block and foreign skill
+  symlinks. Settings temporary files live beside the destination.
+
+### Changed
+
+- Context advisories prioritize saving the handoff before compaction, preserve
+  task continuity, and no longer present input tokens as subscription billing or
+  mandate an external delegation command.
+- Added current recovery-contract documentation and a sourced comparison of
+  related tools. Removed outdated exclusivity and lossless-recovery claims.
+
 ## [1.1.0] - 2026-08-29
 
 Feature release: escalating context-cost warnings below the parachute threshold,
@@ -129,5 +154,5 @@ adds versioning, a changelog, and artifact provenance stamping.
 - v1 limitation: `UserPromptSubmit` only fires on user input; the PreCompact
   fallback covers the autonomous-run gap rather than preventing it.
 
-[Unreleased]: https://github.com/DnaMes/context-parachute/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/DnaMes/context-parachute/compare/v1.1.0...HEAD
 [1.0.0]: https://github.com/DnaMes/context-parachute/releases/tag/v1.0.0

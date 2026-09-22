@@ -1,7 +1,10 @@
 # context-parachute — Design Spec
 
 **Date:** 2026-07-03
-**Status:** Approved design, pre-implementation
+**Status:** Historical design, pre-implementation. The 2026-09-21 review corrected
+assumptions about PreCompact prompt injection, marker completion, and competing
+tools. Use [RELIABILITY.md](RELIABILITY.md), [RELATED-TOOLS.md](RELATED-TOOLS.md),
+and the README for current behavior; historical claims below are not guarantees.
 **Target repo:** `github.com/DnaMes/context-parachute` (public, MIT)
 
 ## One-liner

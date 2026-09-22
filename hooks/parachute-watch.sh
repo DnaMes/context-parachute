@@ -37,7 +37,13 @@ TRANSCRIPT="$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/d
 SESSION_ID="$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // empty' 2>/dev/null || true)"
 [[ -z "$TRANSCRIPT" ]] && { warn "no transcript_path in input"; exit 0; }
 [[ -r "$TRANSCRIPT" ]] || { warn "transcript not readable: $TRANSCRIPT"; exit 0; }
-[[ -z "$SESSION_ID" ]] && SESSION_ID="unknown"
+[[ "$SESSION_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$ ]] || { warn "missing or invalid session_id"; exit 0; }
+
+# Hook launchers may retain a different working directory from the event.
+PROJECT_DIR="$(printf '%s' "$STDIN_JSON" | jq -r '.cwd | select(type == "string" and length > 0)' 2>/dev/null || true)"
+if [[ -n "$PROJECT_DIR" ]]; then
+    cd -- "$PROJECT_DIR" 2>/dev/null || { warn "cannot enter event cwd: $PROJECT_DIR"; exit 0; }
+fi
 
 # --- load config (defaults -> global -> per-project override) ---------------
 THRESHOLD=80
@@ -52,8 +58,16 @@ WARN_STAGES="50 70 85"
 load_config() {
     local file="$1"
     [[ -r "$file" ]] || return 0
-    if ! jq empty "$file" 2>/dev/null; then
-        warn "invalid config JSON, ignoring: $file"
+    if ! jq -e '
+        type == "object" and
+        (if has("threshold_percent") then (.threshold_percent |
+            type == "number" and . == floor and . >= 1 and . <= 100) else true end) and
+        (if has("context_window") then (.context_window |
+            type == "number" and . == floor and . >= 1 and . <= 1000000000) else true end) and
+        (if has("output_dir") then (.output_dir |
+            type == "string" and length > 0 and (explode | all(.[]; . >= 32 and . != 127))) else true end)
+    ' "$file" >/dev/null 2>&1; then
+        warn "invalid config, ignoring: $file"
         return 0
     fi
     local t w o
@@ -64,7 +78,7 @@ load_config() {
     [[ "$w" =~ ^[0-9]+$ ]] && WINDOW="$w"
     [[ -n "$o" ]] && OUTPUT_DIR="$o"
 }
-load_config "${HOME}/.claude/parachute.json"
+load_config "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/parachute.json"
 load_config "$(pwd)/.parachute/config.json"
 [[ "$WINDOW" -gt 0 ]] || { warn "context_window <= 0, using 200000"; WINDOW=200000; }
 
@@ -88,7 +102,11 @@ PARACHUTE_FIRED=0
 # tools, so the watcher runs on Linux and macOS alike. Verified byte-identical
 # output to previous reverse approach on all fixtures.
 USAGE_LINE="$(tail -n 500 "$TRANSCRIPT" 2>/dev/null \
-    | jq -c -R 'fromjson? | select(.type=="assistant" and (.isSidechain != true)) | .message.usage' 2>/dev/null \
+    | jq -c -R 'fromjson? | objects | select(.type=="assistant" and (.isSidechain != true)) |
+        .message.usage | objects |
+        select(.input_tokens | type == "number") |
+        select([.input_tokens, (.cache_creation_input_tokens // 0), (.cache_read_input_tokens // 0)] |
+            all(.[]; type == "number" and . >= 0 and . == floor))' 2>/dev/null \
     | tail -n 1 || true)"
 [[ -z "$USAGE_LINE" ]] && { warn "no assistant usage found in transcript tail"; exit 0; }
 
@@ -109,12 +127,8 @@ if [[ "$WINDOW" -eq 200000 ]] && (( TOKENS > WINDOW )); then
 fi
 
 # --- advisory stages --------------------------------------------------------
-# Cost framing matters more than the percentage: every request re-reads the
-# whole context as cache, so a 900k-token session costs ~900k tokens PER TURN
-# no matter how small the question. That is the number that drains a plan.
-COST_PER_TURN="$TOKENS"
-HOURLY_EST=$(( COST_PER_TURN * 60 / 1000000 ))   # ~M tokens/hour at ~1 turn/min
-
+# The transcript measures input context, not billing or subscription quota.
+# Keep advisories subordinate to the handoff and the user's active task.
 # Pick the HIGHEST stage reached, not the first — iterating low-to-high and
 # breaking on the first match would always print the mildest message.
 STAGE=0
@@ -129,27 +143,21 @@ for stage in $STAGE; do
 
     if (( stage >= 85 )); then
         cat <<EOF
-CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): STOP AND COMPACT NOW.
-Every further turn re-reads ~${COST_PER_TURN} tokens of cached context — roughly
-${HOURLY_EST}M tokens/hour at a normal pace, from the shared plan limit, no matter how
-small the next question is. Parallel sessions multiply this.
-DO THIS BEFORE ANY OTHER WORK: run \`/compact focus on: <current task>\`. Prefer
-compacting over closing-and-reopening: a fresh start re-pays ~80k tokens of system
-prompt, and measured 2026-08-29 daily volume tracks session COUNT, not per-session
-cost. Close only if the work is genuinely finished. Do not start new file reads,
-greps, or subagents first.
+CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): context is high (~${TOKENS} input tokens).
+Save the handoff before compacting if a CONTEXT-PARACHUTE directive follows.
+Prefer \`/compact focus on: <current task>\` at the next natural break, after
+preserving decisions and the next step. Continue the user's task; this advisory
+does not require stopping work. Context size is not a billing or quota estimate.
 EOF
     elif (( stage >= 70 )); then
         cat <<EOF
-CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): each turn now costs ~${COST_PER_TURN} tokens
-(~${HOURLY_EST}M/hour). Plan to \`/compact focus on: <task>\` at the next natural break,
-and offload heavy reads/greps/reviews to \`delegate\` instead of doing them here.
+CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): the latest input contains ~${TOKENS} tokens.
+Plan to preserve task state and use \`/compact focus on: <task>\` at a natural break.
 EOF
     else
         cat <<EOF
-CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): context is growing; each turn re-reads
-~${COST_PER_TURN} tokens. Prefer \`delegate --type explore|bulk|review\` for large
-sweeps so their output never enters this context.
+CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): context is growing (~${TOKENS} input tokens).
+Keep large reads focused and retain the next concrete step for a later handoff.
 EOF
     fi
     break
