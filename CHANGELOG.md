@@ -13,6 +13,21 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ### Fixed
 
+- **The UserPromptSubmit watcher died on every prompt when `parachute.json`
+  omitted `output_dir`** — the documented, most common config shape
+  (`{"threshold_percent":65,"context_window":1000000}`). `load_config` ended on
+  `[[ -n "$o" ]] && OUTPUT_DIR="$o"`; with `o` empty that test is false, a bash
+  function returns the status of its last command, and under `set -e` the
+  failing call killed the hook at the call site. Effect: exit 1 with no stderr
+  on every single prompt, and the watcher never reached the threshold check, so
+  **no advisory and no parachute ever fired** for affected configs — the
+  feature was silently inert while the host agent showed only "Failed with
+  non-blocking status code: No stderr output". `load_config` now returns 0
+  explicitly. The profile test that should have caught this asserted empty
+  stdout only, which a crash satisfies just as well as being below threshold;
+  it now asserts the exit code, and four regression cases cover configs
+  without `output_dir` including one that must still fire the parachute.
+
 - Manual/exported skills now carry `metadata.version` instead of reading an
   unrelated working project's `VERSION`; prevents missing or incorrect handoff
   provenance. Tests require the bundled version to match the canonical release.

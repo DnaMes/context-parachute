@@ -344,8 +344,47 @@ HOME="$profile_home" CLAUDE_CONFIG_DIR="$profile_dir" bash "${REPO_DIR}/install.
 mkdir -p "$profile_dir"
 printf '%s\n' '{"context_window":1000000}' > "${profile_dir}/parachute.json"
 input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t,session_id:"s-profile"}')"
-out="$(printf '%s' "$input" | HOME="$profile_home" CLAUDE_CONFIG_DIR="$profile_dir" TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null)"
-[[ -z "$out" ]] && ok "watcher reads custom profile config" || bad "watcher reads custom profile config"
+out="$(printf '%s' "$input" | HOME="$profile_home" CLAUDE_CONFIG_DIR="$profile_dir" TMPDIR="$RUN_TMP" bash "$WATCH" 2>/dev/null)" && rc=0 || rc=$?
+# Assert the EXIT CODE, not just empty output. This test passed for years while
+# the hook was crashing: the config below omits `output_dir`, which used to make
+# load_config return 1 and kill the watcher under `set -e`. Empty stdout looked
+# like "correctly below threshold" and was indistinguishable from "died on line
+# one of the config load".
+[[ -z "$out" && "$rc" -eq 0 ]] && ok "watcher reads custom profile config" \
+    || bad "watcher reads custom profile config (exit ${rc}, out=${#out} bytes)"
+section "Config without output_dir must not kill the hook (regression)"
+# A global parachute.json that sets only threshold/window — the shape the README
+# documents and the shape that shipped in the wild — left `o` empty, so the final
+# `[[ -n "$o" ]]` in load_config was false. A bash function returns the status of
+# its last command, so load_config returned 1, and under `set -e` that killed the
+# watcher at the CALL SITE: exit 1, no stderr, no advisory, no parachute, on every
+# single prompt. Claude Code surfaced only "Failed with non-blocking status code:
+# No stderr output".
+noout_home="${RUN_TMP}/noout-home"
+noout_dir="${RUN_TMP}/noout-claude"
+mkdir -p "$noout_dir"
+for cfg_json in '{"threshold_percent":65}' \
+                '{"threshold_percent":65,"context_window":1000000}' \
+                '{"context_window":200000}'; do
+    printf '%s\n' "$cfg_json" > "${noout_dir}/parachute.json"
+    input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t,session_id:"s-noout"}')"
+    err_file="${RUN_TMP}/noout.err"
+    printf '%s' "$input" | HOME="$noout_home" CLAUDE_CONFIG_DIR="$noout_dir" \
+        TMPDIR="${RUN_TMP}/noout-tmp-$RANDOM" bash "$WATCH" >/dev/null 2>"$err_file" && rc=0 || rc=$?
+    [[ "$rc" -eq 0 ]] && ok "exit 0 with config ${cfg_json}" \
+        || bad "exit 0 with config ${cfg_json} (got ${rc}, stderr: $(head -c 120 "$err_file"))"
+done
+
+# The threshold path must actually be REACHED, not merely survived: 80% of the
+# default 200000 window is over a 65% threshold, so the directive must appear.
+printf '%s\n' '{"threshold_percent":65}' > "${noout_dir}/parachute.json"
+input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t,session_id:"s-noout-fire"}')"
+out="$(printf '%s' "$input" | HOME="$noout_home" CLAUDE_CONFIG_DIR="$noout_dir" \
+    TMPDIR="${RUN_TMP}/noout-fire" bash "$WATCH" 2>/dev/null)" && rc=0 || rc=$?
+[[ "$rc" -eq 0 ]] && [[ "$out" == *"CONTEXT-PARACHUTE"* ]] \
+    && ok "parachute still fires when output_dir is absent" \
+    || bad "parachute still fires when output_dir is absent (exit ${rc})"
+
 printf '%s\n' '{"output_dir":"profile-snapshots"}' > "${profile_dir}/parachute.json"
 input="$(jq -nc --arg cwd "$event_project" '{trigger:"auto",cwd:$cwd}')"
 rm "${event_project}/.parachute/config.json"

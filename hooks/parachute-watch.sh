@@ -77,6 +77,16 @@ load_config() {
     [[ "$t" =~ ^[0-9]+$ ]] && THRESHOLD="$t"
     [[ "$w" =~ ^[0-9]+$ ]] && WINDOW="$w"
     [[ -n "$o" ]] && OUTPUT_DIR="$o"
+    # MUST stay: a function returns the status of its LAST command, and under
+    # `set -e` a failing function call at top level kills the script. Without
+    # this, a config that omits `output_dir` (the documented, common case —
+    # `{"threshold_percent":65,"context_window":1000000}`) made the final test
+    # false, so load_config returned 1 and the whole watcher died at the call
+    # site with exit 1 and NO stderr. The hook then never reached the threshold
+    # check: every advisory and every parachute trigger was silently dead,
+    # while Claude Code showed only "UserPromptSubmit hook error / Failed with
+    # non-blocking status code: No stderr output" on every single prompt.
+    return 0
 }
 load_config "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/parachute.json"
 load_config "$(pwd)/.parachute/config.json"
