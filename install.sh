@@ -62,7 +62,10 @@ doctor() {
             continue
         fi
         path="$(jq -r --arg e "$event" --arg s "$script" '[.hooks[$e][]?.hooks[]?.command | strings
-            | select(contains($s)) | gsub("\u0027"; "") | split(" ") | map(select(endswith($s)))[]] | first // empty' "$SETTINGS")"
+            | select(contains($s)) | capture("\u0027(?<p>[^\u0027]*" + ($s | gsub("\\."; "\\.")) + ")\u0027").p] | first // empty' "$SETTINGS")"
+        # Unquoted legacy form: `bash /path/to/script`.
+        [[ -n "$path" ]] || path="$(jq -r --arg e "$event" --arg s "$script" '[.hooks[$e][]?.hooks[]?.command | strings
+            | select(contains($s)) | split(" ") | map(select(endswith($s)))[]] | first // empty' "$SETTINGS")"
         if [[ -r "$path" ]]; then
             info "ok    ${event}: ${script} registered (${path})"
         else
@@ -72,16 +75,17 @@ doctor() {
     [[ -e "$SKILL_LINK" ]] && info "ok    skill present" || info "warn  skill link missing: ${SKILL_LINK}"
 
     w=200000
+    local configured=0
     for cfg in "$CONFIG_DEST" "$PWD/.parachute/config.json"; do
         [[ -r "$cfg" ]] || continue
         if jq -e 'type == "object"' "$cfg" >/dev/null 2>&1; then
             t="$(jq -r '.context_window // empty' "$cfg")"
-            [[ "$t" =~ ^[1-9][0-9]*$ ]] && w="$t"
+            [[ "$t" =~ ^[1-9][0-9]*$ ]] && { w="$t"; configured=1; }
         else
             info "warn  invalid config: ${cfg}"
         fi
     done
-    [[ "$w" == 200000 && "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[1-9][0-9]*$ ]] && w="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+    (( configured )) || { [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[1-9][0-9]*$ ]] && w="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"; }
     info "info  effective context window: ${w}"
 
     # The last AUTO compaction shows where this machine really compacts.

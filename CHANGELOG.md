@@ -11,6 +11,21 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-20
+
+Fixes for three non-blocking findings of the v1.2.0 review gate.
+
+### Fixed
+
+- `--doctor` no longer lets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` override an
+  explicitly configured `context_window` of 200000; it now follows the same
+  precedence as the watcher (config first, env second).
+- `--doctor` resolves the quoted hook path, so an install path containing
+  spaces is no longer reported as an unreadable script.
+- The local git exclude for `emergency.md` is now `**/<output_dir>/emergency.md`
+  instead of a root-anchored pattern, so snapshots written for a project
+  directory below the repository root stay out of `git status` as well.
+
 ## [1.2.0] - 2026-10-20
 
 Feature release from a review of four weeks of real sessions (99 sessions, 33

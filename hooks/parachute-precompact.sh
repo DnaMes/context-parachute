@@ -85,7 +85,7 @@ if [[ "$OUTPUT_DIR" != /* ]] && git rev-parse --is-inside-work-tree >/dev/null 2
         && ! git check-ignore -q -- "$EMERGENCY" 2>/dev/null; then
     excl="$(git rev-parse --git-path info/exclude 2>/dev/null || true)"
     if [[ -n "$excl" ]] && mkdir -p -- "$(dirname "$excl")" 2>/dev/null; then
-        printf '%s\n' "/${OUTPUT_DIR#./}/emergency.md" >> "$excl" 2>/dev/null || true
+        printf '%s\n' "**/${OUTPUT_DIR#./}/emergency.md" >> "$excl" 2>/dev/null || true
     fi
 fi
 [[ -d "$EMERGENCY" ]] && { warn "snapshot destination is a directory: $EMERGENCY"; exit 0; }

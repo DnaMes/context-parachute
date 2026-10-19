@@ -481,6 +481,25 @@ jq -e --arg c "bash '${REPO_DIR}/hooks/parachute-watch.sh'" '.hooks.PostToolUse 
 HOME="$doc_home" bash "${REPO_DIR}/install.sh" --bogus >/dev/null 2>&1 && bad "unknown installer option is rejected" || ok "unknown installer option is rejected"
 rm -rf "$doc_home"
 
+# Regressions found by the v1.2.0 review gate.
+sp_home="$(mktemp -d)"; sp_repo="${sp_home}/dir with space/ctx"
+mkdir -p "${sp_home}/.claude" "${sp_repo}/hooks"
+cp "${REPO_DIR}/hooks/"*.sh "${sp_repo}/hooks/"; cp "${REPO_DIR}/VERSION" "${REPO_DIR}/install.sh" "$sp_repo/"; mkdir -p "${sp_repo}/skill"
+HOME="$sp_home" bash "${sp_repo}/install.sh" >/dev/null 2>&1
+out="$(HOME="$sp_home" bash "${sp_repo}/install.sh" --doctor 2>&1)"; rc=$?
+[[ $rc -eq 0 && "$out" == *"ok    UserPromptSubmit"* ]] && ok "doctor resolves an install path containing spaces" || bad "doctor resolves an install path containing spaces (rc=$rc)"
+printf '%s\n' '{"context_window":200000}' > "${sp_home}/.claude/parachute.json"
+out="$(HOME="$sp_home" CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 bash "${sp_repo}/install.sh" --doctor 2>&1)"
+[[ "$out" == *"effective context window: 200000"* ]] && ok "doctor: explicit 200000 config beats the env window" || bad "doctor: explicit 200000 config beats the env window"
+rm -rf "$sp_home"
+
+sub_repo="$(mktemp -d)"; git -C "$sub_repo" init -q 2>/dev/null; mkdir -p "${sub_repo}/pkg/inner"
+jq -nc --arg tr auto --arg s s-subdir --arg cwd "${sub_repo}/pkg/inner" '{trigger:$tr, session_id:$s, cwd:$cwd}' \
+    | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$PRECOMPACT" 2>/dev/null
+[[ -s "${sub_repo}/pkg/inner/.parachute/emergency.md" && -z "$(git -C "$sub_repo" status --porcelain)" ]] \
+    && ok "snapshot below the repo root is excluded too" || bad "snapshot below the repo root is excluded too"
+rm -rf "$sub_repo"
+
 # ---------------------------------------------------------------------------
 section "Version consistency (VERSION == CHANGELOG == tag)"
 
