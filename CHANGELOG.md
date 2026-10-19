@@ -11,6 +11,14 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-20
+
+### Fixed
+
+- `install-host.sh agy --uninstall` keeps the `context-parachute` entry when it points
+  at another clone.
+- The Pi extension no longer writes a `.compacted` marker nothing reads.
+
 ## [1.4.0] - 2026-10-20
 
 ### Added

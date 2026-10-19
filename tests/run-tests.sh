@@ -680,6 +680,10 @@ ih --uninstall codex gemini cursor agy >/dev/null
 [[ "$(jq -c . "${ih_home}/.codex/hooks.json")" == '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"foreign.sh"}]}]}}' \
     && "$(jq -c 'has("session-pipeline") and (has("context-parachute") | not)' "${ih_home}/.gemini/config/hooks.json")" == "true" ]] \
     && ok "uninstall removes only our entries" || bad "uninstall removes only our entries"
+printf '%s\n' '{"context-parachute":{"PreInvocation":[{"type":"command","command":"bash /other/clone/hooks/parachute-host.sh agy PreInvocation"}]}}' > "${ih_home}/.gemini/config/hooks.json"
+out="$(ih --uninstall agy)"
+[[ "$out" == *"another clone"* ]] && jq -e 'has("context-parachute")' "${ih_home}/.gemini/config/hooks.json" >/dev/null \
+    && ok "agy uninstall keeps an entry owned by another clone" || bad "agy uninstall keeps an entry owned by another clone"
 ih --bogus >/dev/null && bad "install-host rejects unknown arguments" || ok "install-host rejects unknown arguments"
 out="$(HOME="$(mktemp -d)" bash "$IH" codex 2>&1)"; [[ "$out" == *"skip  codex"* ]] && ok "absent host is skipped, not created" || bad "absent host is skipped, not created"
 rm -rf "$ih_home"

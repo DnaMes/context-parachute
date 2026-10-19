@@ -7,7 +7,7 @@
  *
  *   before_agent_start      parachute-watch.sh      (UserPromptSubmit)
  *   turn_end                parachute-watch.sh      (PostToolUse, throttled by the hook)
- *   session_before_compact  parachute-precompact.sh (PreCompact) + .compacted marker
+ *   session_before_compact  parachute-precompact.sh (PreCompact)
  *   session_compact         parachute-resume.sh     (SessionStart compact), --tool pi
  *
  * Install (the symlink is resolved to the repo file at load time):
@@ -17,8 +17,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -26,7 +25,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 // integrations/pi/context-parachute.ts -> repo root (through the symlink, if any)
 const REPO = resolve(dirname(realpathSync(fileURLToPath(import.meta.url))), "..", "..");
 const MESSAGE_TYPE = "context-parachute";
-const SESSION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 
 // Runs one hook with a JSON event on stdin and returns its stdout ("" on timeout or spawn failure).
 function runHook(ctx: ExtensionContext, script: string, event: Record<string, unknown>, args: string[] = []): string {
@@ -87,16 +85,10 @@ export default function (pi: ExtensionAPI): void {
     }
   });
 
-  // PreCompact: the snapshot hook runs first, then the marker tells the next compaction bookkeeping this session compacted.
+  // PreCompact: the snapshot hook; the resume card is queued by session_compact, so no marker is needed.
   pi.on("session_before_compact", (event, ctx) => {
     try {
       runHook(ctx, "parachute-precompact.sh", { trigger: event.reason === "manual" ? "manual" : "auto" });
-      const id = ctx.sessionManager.getSessionId();
-      if (SESSION_ID.test(id)) {
-        const dir = join(tmpdir(), "context-parachute");
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, `${id}.compacted`), "");
-      }
     } catch {
       // fail-open: never cancel the compaction
     }

@@ -190,6 +190,9 @@ apply_json_agy_uninstall() {
     [[ -f "$file" ]] || return 0
     jq empty "$file" 2>/dev/null || err "${file} is not valid JSON; aborting."
     jq -e 'has("context-parachute")' "$file" >/dev/null 2>&1 || { info "unchanged ${file}"; return 0; }
+    # Only remove our own entry: a clone elsewhere may own it now.
+    jq -e --arg d "${REPO_DIR}/hooks/" '."context-parachute".PreInvocation[0].command | tostring | contains($d)' "$file" >/dev/null 2>&1 \
+        || { info "kept ${file}: the context-parachute entry belongs to another clone"; return 0; }
     new="$(jq 'del(."context-parachute")' "$file")"
     cp -- "$file" "$(mktemp "${file}.bak.XXXXXXXX")"
     printf '%s\n' "$new" > "${file}.tmp.$$" && mv -f -- "${file}.tmp.$$" "$file"
