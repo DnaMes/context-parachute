@@ -107,6 +107,16 @@ The installer:
 A conflicting skill directory or symlink is reported before settings change.
 Re-run the installer after upgrading to migrate registered commands and timeouts.
 
+`./install.sh --with-posttool` additionally registers the watcher as a `PostToolUse`
+hook (wrapped as `additionalContext`, one check per 30 s per session), which covers
+long unattended tool loops where no prompt arrives. `./install.sh --doctor` is a
+read-only health check: it verifies that the watcher and PreCompact hooks are
+registered with a readable script, prints the effective window, and warns when the
+last auto-compaction (recorded in
+`${XDG_STATE_HOME:-~/.local/state}/context-parachute/compactions.log`) happened
+far below the configured window. Every compaction also re-arms the session's
+markers, so advisories fire again afterwards.
+
 Uninstall removes only this clone's commands and skill symlink, preserves other
 handlers even within the same block, and keeps the config file:
 
@@ -157,6 +167,9 @@ per-project via `.parachute/config.json`:
   "context_window": 1000000
 }
 ```
+
+Without a configured `context_window`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (if set) is
+used as the window; an explicit config value always wins.
 
 If the default is left in place and observed tokens exceed it, the watcher emits
 a one-line `WARN:` to stderr as a nudge — it does not change the trigger decision.

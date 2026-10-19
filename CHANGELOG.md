@@ -11,6 +11,40 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-20
+
+Feature release from a review of four weeks of real sessions (99 sessions, 33
+auto-compactions, 0 manual) plus similar tools and open Claude Code issues. Two
+independent second opinions (Codex, DeepSeek) agreed on the scope; statusline
+bridge, semantic snapshots, redaction, adapters and a Stop-hook handoff were
+deliberately left out.
+
+### Added
+
+- **`./install.sh --doctor`** — read-only health check. Reports whether the
+  watcher and PreCompact hooks are registered *and* their script is readable,
+  the effective context window, and whether the last auto-compaction happened
+  far below the configured window (the watcher would then stay silent). Exits 1
+  only when a required hook is missing. Motivation: the watcher was absent from
+  one machine's `settings.json` for three weeks with no visible symptom.
+- **Re-arm after compaction.** PreCompact (auto and manual) clears the session's
+  fired and advisory markers, so the 50/70/85% advisories and the handoff
+  directive fire again instead of staying silent for the rest of the session.
+- **Compaction log** at `${XDG_STATE_HOME:-~/.local/state}/context-parachute/compactions.log`
+  (`epoch, session, trigger, tokens`, bounded to 500 lines); read by `--doctor`.
+- **PostToolUse mode.** The watcher also works as a `PostToolUse` hook (output
+  wrapped as `additionalContext`, one check per 30 s per session, tune with
+  `PARACHUTE_TICK_SECONDS`) for long unattended tool loops where no prompt
+  arrives. Opt-in: `./install.sh --with-posttool`.
+- **`CLAUDE_CODE_AUTO_COMPACT_WINDOW`** is used as the context window when
+  `context_window` is not configured.
+- `hooks/parachute-lib.sh`: transcript token measurement shared by both hooks.
+
+### Changed
+
+- `emergency.md` is added to the repository's local `.git/info/exclude`, so
+  unattended runs no longer leave untracked files in `git status`.
+
 ### Fixed
 
 - **The UserPromptSubmit watcher died on every prompt when `parachute.json`

@@ -5,7 +5,7 @@
 # idempotency, plus shellcheck on every shipped script.
 set -uo pipefail
 # Do not inherit a host-specific Claude profile into the isolated tests.
-unset CLAUDE_CONFIG_DIR
+unset CLAUDE_CONFIG_DIR XDG_STATE_HOME CLAUDE_CODE_AUTO_COMPACT_WINDOW
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="${REPO_DIR}/tests/fixtures"
@@ -415,6 +415,73 @@ HOME="$foreign_home" bash "${REPO_DIR}/install.sh" >/dev/null 2>&1; rc=$?
     && ok "conflicting skill aborts before settings mutation" || bad "conflicting skill aborts before settings mutation"
 
 # ---------------------------------------------------------------------------
+section "Compaction re-arm, log and snapshot hygiene (v1.2.0)"
+
+rc_scratch="$(mktemp -d)"
+git -C "$rc_scratch" init -q 2>/dev/null
+mkdir -p "${RUN_TMP}/context-parachute"
+rc_input() { jq -nc --arg tr "$1" --arg s "$2" --arg t "${FIXTURES}/at-80.jsonl" --arg cwd "$rc_scratch" \
+    '{trigger:$tr, session_id:$s, transcript_path:$t, cwd:$cwd}'; }
+rc_run() { rc_input "$1" "$2" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$PRECOMPACT" 2>/dev/null; }
+
+: > "${RUN_TMP}/context-parachute/s-rearm.fired"; : > "${RUN_TMP}/context-parachute/s-rearm.warn70"
+rc_run manual s-rearm
+[[ ! -e "${RUN_TMP}/context-parachute/s-rearm.fired" && ! -e "${RUN_TMP}/context-parachute/s-rearm.warn70" ]] \
+    && ok "manual compaction re-arms the session markers" || bad "manual compaction re-arms the session markers"
+: > "${RUN_TMP}/context-parachute/s-rearm2.fired"
+rc_run auto s-rearm2
+[[ ! -e "${RUN_TMP}/context-parachute/s-rearm2.fired" ]] && ok "auto compaction re-arms the session markers" || bad "auto compaction re-arms the session markers"
+out="$(run_watch at-80.jsonl s-rearm2)"
+[[ "$out" == *"CONTEXT-PARACHUTE"* ]] && ok "watcher fires again after a compaction" || bad "watcher fires again after a compaction"
+
+cl="${RUN_HOME}/.local/state/context-parachute/compactions.log"
+grep -q "$(printf 's-rearm2\tauto\t160000')" "$cl" 2>/dev/null && ok "compaction log records trigger and token level" || bad "compaction log records trigger and token level"
+[[ -z "$(git -C "$rc_scratch" status --porcelain)" ]] && ok "emergency snapshot stays out of git status" || bad "emergency snapshot stays out of git status"
+rm -rf "$rc_scratch"
+
+section "Effective window from CLAUDE_CODE_AUTO_COMPACT_WINDOW (v1.2.0)"
+
+input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-envwin"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 bash "$WATCH" 2>/dev/null)"
+[[ -z "$out" ]] && ok "env window 1M -> 16% is silent" || bad "env window 1M -> 16% is silent"
+mkdir -p "${RUN_HOME}/.claude"; printf '%s\n' '{"context_window":200000}' > "${RUN_HOME}/.claude/parachute.json"
+input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-envwin2"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 bash "$WATCH" 2>/dev/null)"
+[[ "$out" == *"CONTEXT-PARACHUTE"* ]] && ok "explicit config window beats the env window" || bad "explicit config window beats the env window"
+rm -f "${RUN_HOME}/.claude/parachute.json"
+
+section "PostToolUse delivery (v1.2.0)"
+
+pt_input() { jq -nc --arg t "${FIXTURES}/at-80.jsonl" --arg s "$1" '{hook_event_name:"PostToolUse", transcript_path:$t, session_id:$s}'; }
+out="$(pt_input s-post | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
+[[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName' 2>/dev/null)" == "PostToolUse" \
+    && "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)" == *"CONTEXT-PARACHUTE"* ]] \
+    && ok "PostToolUse wraps the directive as additionalContext JSON" || bad "PostToolUse wraps the directive as additionalContext JSON (got: ${out:0:80})"
+out="$(pt_input s-post | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
+[[ -z "$out" ]] && ok "PostToolUse is throttled within the tick window" || bad "PostToolUse is throttled within the tick window"
+out="$(pt_input s-post | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" PARACHUTE_TICK_SECONDS=0 bash "$WATCH" 2>/dev/null)"
+[[ -z "$out" ]] && ok "PostToolUse respects the fired marker once the throttle expires" || bad "PostToolUse respects the fired marker once the throttle expires"
+
+section "Doctor (v1.2.0)"
+
+doc_home="$(mktemp -d)"; mkdir -p "${doc_home}/.claude"; printf '{}\n' > "${doc_home}/.claude/settings.json"
+out="$(HOME="$doc_home" bash "${REPO_DIR}/install.sh" --doctor 2>&1)"; rc=$?
+[[ $rc -ne 0 && "$out" == *"FAIL  UserPromptSubmit"* ]] && ok "doctor fails when the watcher is not registered" || bad "doctor fails when the watcher is not registered (rc=$rc)"
+[[ "$(cat "${doc_home}/.claude/settings.json")" == "{}" ]] && ok "doctor does not create or change settings" || bad "doctor does not create or change settings"
+HOME="$doc_home" bash "${REPO_DIR}/install.sh" >/dev/null 2>&1
+out="$(HOME="$doc_home" bash "${REPO_DIR}/install.sh" --doctor 2>&1)"; rc=$?
+[[ $rc -eq 0 && "$out" == *"ok    UserPromptSubmit"* && "$out" == *"ok    PreCompact"* ]] && ok "doctor passes after install" || bad "doctor passes after install (rc=$rc)"
+mkdir -p "${doc_home}/.local/state/context-parachute"
+printf '1\ts\tauto\t100000\n' > "${doc_home}/.local/state/context-parachute/compactions.log"
+out="$(HOME="$doc_home" bash "${REPO_DIR}/install.sh" --doctor 2>&1)"
+[[ "$out" == *"context_window is probably too large"* ]] && ok "doctor warns when compaction happened far below the window" || bad "doctor warns when compaction happened far below the window"
+HOME="$doc_home" bash "${REPO_DIR}/install.sh" --with-posttool >/dev/null 2>&1
+jq -e --arg c "bash '${REPO_DIR}/hooks/parachute-watch.sh'" '.hooks.PostToolUse | any(.[].hooks[]?; .command == $c)' "${doc_home}/.claude/settings.json" >/dev/null 2>&1 \
+    && ok "--with-posttool registers the PostToolUse hook" || bad "--with-posttool registers the PostToolUse hook"
+HOME="$doc_home" bash "${REPO_DIR}/install.sh" --bogus >/dev/null 2>&1 && bad "unknown installer option is rejected" || ok "unknown installer option is rejected"
+rm -rf "$doc_home"
+
+# ---------------------------------------------------------------------------
 section "Version consistency (VERSION == CHANGELOG == tag)"
 
 VERSION_FILE="${REPO_DIR}/VERSION"
@@ -446,7 +513,7 @@ fi
 section "shellcheck"
 
 if command -v shellcheck >/dev/null 2>&1; then
-    for s in "$WATCH" "$PRECOMPACT" "${REPO_DIR}/install.sh" "${REPO_DIR}/uninstall.sh" "${BASH_SOURCE[0]}"; do
+    for s in "$WATCH" "$PRECOMPACT" "${REPO_DIR}/hooks/parachute-lib.sh" "${REPO_DIR}/install.sh" "${REPO_DIR}/uninstall.sh" "${BASH_SOURCE[0]}"; do
         if shellcheck -S warning "$s" >/dev/null 2>&1; then
             ok "shellcheck $(basename "$s")"
         else

@@ -1,5 +1,5 @@
 #!/bin/bash
-# context-parachute — UserPromptSubmit watcher hook.
+# context-parachute — UserPromptSubmit watcher hook (also usable as PostToolUse).
 #
 # WHY: Claude Code auto-compacts at ~95% context, by which point output quality
 # has already degraded and detail is lost. This hook computes current context
@@ -24,6 +24,9 @@ VERSION="unknown"
 [[ -r "$VERSION_FILE" ]] && VERSION="$(head -n1 "$VERSION_FILE" 2>/dev/null | tr -d '[:space:]' || true)"
 [[ -n "$VERSION" ]] || VERSION="unknown"
 
+# shellcheck source=parachute-lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/parachute-lib.sh" 2>/dev/null || { warn "cannot load parachute-lib.sh"; exit 0; }
+
 # --- read stdin JSON --------------------------------------------------------
 STDIN_JSON=""
 if [[ ! -t 0 ]]; then
@@ -39,6 +42,23 @@ SESSION_ID="$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // empty' 2>/dev/nu
 [[ -r "$TRANSCRIPT" ]] || { warn "transcript not readable: $TRANSCRIPT"; exit 0; }
 [[ "$SESSION_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$ ]] || { warn "missing or invalid session_id"; exit 0; }
 
+MARKER_DIR="${TMPDIR:-/tmp}/context-parachute"
+
+# PostToolUse: the same watcher covers long tool loops where no prompt arrives.
+# Its stdout is not injected as context, so re-run ourselves and wrap the text as
+# additionalContext. Throttled: a tool loop fires this hundreds of times.
+if [[ "$(printf '%s' "$STDIN_JSON" | jq -r '.hook_event_name // empty' 2>/dev/null || true)" == "PostToolUse" \
+        && -z "${PARACHUTE_INNER:-}" ]]; then
+    tick="${MARKER_DIR}/${SESSION_ID}.tick"
+    last="$(stat -c %Y "$tick" 2>/dev/null || stat -f %m "$tick" 2>/dev/null || echo 0)"
+    (( $(date +%s) - last >= ${PARACHUTE_TICK_SECONDS:-30} )) || exit 0
+    mkdir -p "$MARKER_DIR" 2>/dev/null && : > "$tick" 2>/dev/null || true
+    inner="$(printf '%s' "$STDIN_JSON" | PARACHUTE_INNER=1 bash "${BASH_SOURCE[0]}" || true)"
+    [[ -n "$inner" ]] && jq -nc --arg c "$inner" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $c}}'
+    exit 0
+fi
+
 # Hook launchers may retain a different working directory from the event.
 PROJECT_DIR="$(printf '%s' "$STDIN_JSON" | jq -r '.cwd | select(type == "string" and length > 0)' 2>/dev/null || true)"
 if [[ -n "$PROJECT_DIR" ]]; then
@@ -48,6 +68,7 @@ fi
 # --- load config (defaults -> global -> per-project override) ---------------
 THRESHOLD=80
 WINDOW=200000
+WINDOW_CONFIGURED=0
 OUTPUT_DIR=".parachute"
 # Escalating advisory stages, checked before the parachute threshold.
 # WHY: a single one-shot warning at 75% did not stop four parallel sessions
@@ -75,7 +96,7 @@ load_config() {
     w="$(jq -r '.context_window // empty'   "$file" 2>/dev/null || true)"
     o="$(jq -r '.output_dir // empty'       "$file" 2>/dev/null || true)"
     [[ "$t" =~ ^[0-9]+$ ]] && THRESHOLD="$t"
-    [[ "$w" =~ ^[0-9]+$ ]] && WINDOW="$w"
+    [[ "$w" =~ ^[0-9]+$ ]] && { WINDOW="$w"; WINDOW_CONFIGURED=1; }
     [[ -n "$o" ]] && OUTPUT_DIR="$o"
     # MUST stay: a function returns the status of its LAST command, and under
     # `set -e` a failing function call at top level kills the script. Without
@@ -90,10 +111,13 @@ load_config() {
 }
 load_config "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/parachute.json"
 load_config "$(pwd)/.parachute/config.json"
+# No configured window: Claude Code's own auto-compact window is the effective one.
+if (( ! WINDOW_CONFIGURED )) && [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[1-9][0-9]*$ ]]; then
+    WINDOW="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+fi
 [[ "$WINDOW" -gt 0 ]] || { warn "context_window <= 0, using 200000"; WINDOW=200000; }
 
 # --- fired-marker: one shot per session -------------------------------------
-MARKER_DIR="${TMPDIR:-/tmp}/context-parachute"
 MARKER="${MARKER_DIR}/${SESSION_ID}.fired"
 # NOTE: the parachute marker stays one-shot (the handoff is written once), but
 # the advisory stages below have their own per-stage markers, so a session that
@@ -111,19 +135,8 @@ PARACHUTE_FIRED=0
 # of reversing the file to take the first. Avoids GNU-only and BSD-only reverse
 # tools, so the watcher runs on Linux and macOS alike. Verified byte-identical
 # output to previous reverse approach on all fixtures.
-USAGE_LINE="$(tail -n 500 "$TRANSCRIPT" 2>/dev/null \
-    | jq -c -R 'fromjson? | objects | select(.type=="assistant" and (.isSidechain != true)) |
-        .message.usage | objects |
-        select(.input_tokens | type == "number") |
-        select([.input_tokens, (.cache_creation_input_tokens // 0), (.cache_read_input_tokens // 0)] |
-            all(.[]; type == "number" and . >= 0 and . == floor))' 2>/dev/null \
-    | tail -n 1 || true)"
-[[ -z "$USAGE_LINE" ]] && { warn "no assistant usage found in transcript tail"; exit 0; }
-
-TOKENS="$(printf '%s' "$USAGE_LINE" | jq -r \
-    '((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))' \
-    2>/dev/null || true)"
-[[ "$TOKENS" =~ ^[0-9]+$ ]] || { warn "could not parse token usage"; exit 0; }
+TOKENS="$(parachute_last_tokens "$TRANSCRIPT")"
+[[ "$TOKENS" =~ ^[0-9]+$ ]] || { warn "no usable assistant usage found in transcript tail"; exit 0; }
 
 PERCENT=$(( TOKENS * 100 / WINDOW ))
 
