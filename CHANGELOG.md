@@ -11,6 +11,17 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-20
+
+Follow-ups from the v1.3.0 review gate.
+
+### Fixed
+
+- An invalid `output_dir` in `parachute.json` is ignored with a `WARN:` on stderr
+  again (the 1.3.0 refactor into the shared helper had dropped the warning).
+- The tests-before-commit helper exempts the tag-consistency failure only when the
+  suite finished (printed its `Results:` line); a timeout or crash now blocks.
+
 ## [1.3.0] - 2026-10-20
 
 ### Added

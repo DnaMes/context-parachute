@@ -30,7 +30,11 @@ parachute_output_dir() {
         [[ -r "$cfg" ]] || continue
         o="$(jq -r 'if type == "object" and (.output_dir | type == "string" and length > 0
             and (explode | all(.[]; . >= 32 and . != 127))) then .output_dir else empty end' "$cfg" 2>/dev/null || true)"
-        [[ -n "$o" ]] && out="$o"
+        if [[ -n "$o" ]]; then
+            out="$o"
+        elif [[ "$(jq -r 'if type == "object" and has("output_dir") then "set" else empty end' "$cfg" 2>/dev/null || true)" == "set" ]]; then
+            printf 'WARN: context-parachute: invalid output_dir in %s, ignoring\n' "$cfg" >&2
+        fi
     done
     printf '%s' "$out"
 }

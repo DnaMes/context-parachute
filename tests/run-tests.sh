@@ -567,6 +567,21 @@ jq -e '(.hooks // {}) | has("SessionStart") | not' "${ri_home}/.claude/settings.
     && ok "uninstall removes the resume hook" || bad "uninstall removes the resume hook"
 rm -rf "$ri_home"
 
+# Review-gate follow-ups (v1.3.1).
+section "Invalid output_dir warns; test helper never exempts a crashed run (v1.3.1)"
+oc_dir="$(mktemp -d)"; printf '%s\n' '{"output_dir":"bad\u0001dir"}' > "${oc_dir}/parachute.json"
+oc_err="$(CLAUDE_CONFIG_DIR="$oc_dir" HOME="$RUN_HOME" bash -c 'source "$1"; parachute_output_dir' _ "${REPO_DIR}/hooks/parachute-lib.sh" 2>&1 >/dev/null)"
+[[ "$oc_err" == *"invalid output_dir"* ]] && ok "invalid output_dir warns on stderr" || bad "invalid output_dir warns on stderr (got: ${oc_err:0:60})"
+rm -rf "$oc_dir"
+tg_repo="$(mktemp -d)"; git -C "$tg_repo" init -q; mkdir -p "${tg_repo}/tests" "${tg_repo}/hooks" "${tg_repo}/.githooks"
+cp "${REPO_DIR}/.githooks/run-tests-on-commit" "${tg_repo}/.githooks/"
+printf '#!/bin/bash\nprintf "  FAIL git tag (1.0.0) matches VERSION (1.0.1)\\n"\nexit 1\n' > "${tg_repo}/tests/run-tests.sh"
+: > "${tg_repo}/hooks/x"; git -C "$tg_repo" add hooks/x tests/run-tests.sh
+(cd "$tg_repo" && bash .githooks/run-tests-on-commit >/dev/null 2>&1) && bad "tag-only FAIL without Results line is blocked" || ok "tag-only FAIL without Results line is blocked"
+printf '#!/bin/bash\nprintf "  FAIL git tag (1.0.0) matches VERSION (1.0.1)\\nResults: 1 passed, 1 failed\\n"\nexit 1\n' > "${tg_repo}/tests/run-tests.sh"
+(cd "$tg_repo" && bash .githooks/run-tests-on-commit >/dev/null 2>&1) && ok "tag-only FAIL with a completed run is exempt" || bad "tag-only FAIL with a completed run is exempt"
+rm -rf "$tg_repo"
+
 # ---------------------------------------------------------------------------
 section "Version consistency (VERSION == CHANGELOG == tag)"
 

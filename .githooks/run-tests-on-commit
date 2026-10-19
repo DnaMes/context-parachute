@@ -40,7 +40,8 @@ tag_re='^  FAIL git tag \([^()]*\) matches VERSION \([^()]*\)$'
 tag_count="$(printf '%s\n' "$clean" | grep -cE "$tag_re" || true)"
 other="$(printf '%s\n' "$clean" | grep '^  FAIL ' | grep -vE "$tag_re" || true)"
 
-if [[ -z "$other" && "$tag_count" == "1" ]]; then
+# A timeout or crash prints no "Results:" line; never exempt that run.
+if [[ -z "$other" && "$tag_count" == "1" ]] && printf '%s\n' "$clean" | grep -q '^Results:'; then
     echo "[tests] only the tag-consistency check failed (VERSION bumped, tag not created yet); commit allowed."
     exit 0
 fi
