@@ -582,6 +582,14 @@ printf '#!/bin/bash\nprintf "  FAIL git tag (1.0.0) matches VERSION (1.0.1)\\nRe
 (cd "$tg_repo" && bash .githooks/run-tests-on-commit >/dev/null 2>&1) && ok "tag-only FAIL with a completed run is exempt" || bad "tag-only FAIL with a completed run is exempt"
 rm -rf "$tg_repo"
 
+# Installer accepts a skill link that resolves to this clone through another link (v1.3.2).
+il_home="$(mktemp -d)"; mkdir -p "${il_home}/.claude/skills" "${il_home}/lib"
+ln -s "${REPO_DIR}/skill" "${il_home}/lib/context-parachute"; ln -s "${il_home}/lib/context-parachute" "${il_home}/.claude/skills/context-parachute"
+HOME="$il_home" bash "${REPO_DIR}/install.sh" >/dev/null 2>&1 && ok "installer accepts an indirect skill link to this clone" || bad "installer accepts an indirect skill link to this clone"
+rm "${il_home}/.claude/skills/context-parachute"; ln -s /tmp "${il_home}/.claude/skills/context-parachute"
+HOME="$il_home" bash "${REPO_DIR}/install.sh" >/dev/null 2>&1 && bad "installer rejects a skill link to elsewhere" || ok "installer rejects a skill link to elsewhere"
+rm -rf "$il_home"
+
 # ---------------------------------------------------------------------------
 section "Version consistency (VERSION == CHANGELOG == tag)"
 

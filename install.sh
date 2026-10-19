@@ -123,7 +123,8 @@ RESUME_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-resume.sh" | jq -Rrs
 
 # Fail before touching settings if another installation owns the skill path.
 if [[ -L "$SKILL_LINK" ]]; then
-    [[ "$(readlink "$SKILL_LINK")" == "${REPO_DIR}/skill" ]] || err "skill link points elsewhere: $SKILL_LINK"
+    # An indirect link (e.g. a managed skill library) that resolves to this clone's skill is fine.
+    [[ "$(readlink -f "$SKILL_LINK")" == "$(readlink -f "${REPO_DIR}/skill")" ]] || err "skill link points elsewhere: $SKILL_LINK"
 elif [[ -e "$SKILL_LINK" ]]; then
     err "skill path already exists and is not this installation's symlink: $SKILL_LINK"
 fi

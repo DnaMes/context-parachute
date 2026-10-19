@@ -11,6 +11,14 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-20
+
+### Fixed
+
+- The installer accepts a skill link that resolves to this clone through another
+  symlink (managed skill libraries), instead of aborting with "skill link points
+  elsewhere".
+
 ## [1.3.1] - 2026-10-20
 
 Follow-ups from the v1.3.0 review gate.
