@@ -41,7 +41,7 @@ SESSION_ID="$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // empty' 2>/dev/nu
 if [[ "$SESSION_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$ ]]; then
     # After a compaction the context is small again: the watcher must warn anew
     # instead of staying silent for the rest of the session.
-    rm -f -- "${TMPDIR:-/tmp}/context-parachute/${SESSION_ID}".fired "${TMPDIR:-/tmp}/context-parachute/${SESSION_ID}".warn* 2>/dev/null || true
+    rm -f -- "${TMPDIR:-/tmp}/context-parachute/${SESSION_ID}".fired "${TMPDIR:-/tmp}/context-parachute/${SESSION_ID}".warn* "${TMPDIR:-/tmp}/context-parachute/${SESSION_ID}".remind 2>/dev/null || true
     # `install.sh --doctor` compares these levels with the configured window.
     TRANSCRIPT="$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
     LOG_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/context-parachute"
@@ -64,17 +64,7 @@ fi
 
 # --- bash-only snapshot (no model needed) -----------------------------------
 # Load output_dir from config so the snapshot lands where the rest goes.
-OUTPUT_DIR=".parachute"
-for cfg in "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/parachute.json" "$(pwd)/.parachute/config.json"; do
-    [[ -r "$cfg" ]] || continue
-    if jq -e 'type == "object" and (if has("output_dir") then (.output_dir |
-        type == "string" and length > 0 and (explode | all(.[]; . >= 32 and . != 127))) else true end)' "$cfg" >/dev/null 2>&1; then
-        o="$(jq -r '.output_dir // empty' "$cfg" 2>/dev/null || true)"
-        [[ -n "$o" ]] && OUTPUT_DIR="$o"
-    else
-        warn "invalid config, ignoring: $cfg"
-    fi
-done
+OUTPUT_DIR="$(parachute_output_dir)"
 
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S %z' 2>/dev/null || echo unknown)"
 mkdir -p -- "$OUTPUT_DIR" 2>/dev/null || { warn "could not create output dir: $OUTPUT_DIR"; exit 0; }

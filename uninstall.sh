@@ -1,7 +1,7 @@
 #!/bin/bash
 # context-parachute — uninstaller.
 #
-# Removes the two hook blocks (matched by their command paths), removes the skill
+# Removes the hook blocks (matched by their command paths), removes the skill
 # symlink, and leaves the config file in place (so a reinstall keeps your settings).
 set -euo pipefail
 
@@ -19,6 +19,7 @@ command -v jq >/dev/null 2>&1 || err "jq is required but not found."
 # Claude passes command strings through sh -c: quote paths for that boundary.
 WATCH_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-watch.sh" | jq -Rrs @sh)"
 PRECOMPACT_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-precompact.sh" | jq -Rrs @sh)"
+RESUME_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-resume.sh" | jq -Rrs @sh)"
 
 if [[ -f "$SETTINGS" ]]; then
     jq empty "$SETTINGS" 2>/dev/null || err "${SETTINGS} is not valid JSON; aborting."
@@ -28,13 +29,13 @@ if [[ -f "$SETTINGS" ]]; then
 
     tmp="$(mktemp "${SETTINGS}.tmp.XXXXXXXX")"
     # Remove only our commands; users may have added siblings to the same block.
-    jq --arg w "$WATCH_CMD" --arg p "$PRECOMPACT_CMD" \
+    jq --arg w "$WATCH_CMD" --arg p "$PRECOMPACT_CMD" --arg r "$RESUME_CMD" \
         --arg lw "$LEGACY_WATCH_CMD" --arg lp "$LEGACY_PRECOMPACT_CMD" '
         if .hooks then
           .hooks |= with_entries(
             .value |= map(
-                if any(.hooks[]?; .command == $w or .command == $p or .command == $lw or .command == $lp) then
-                    .hooks |= map(select(.command != $w and .command != $p and .command != $lw and .command != $lp)) |
+                if any(.hooks[]?; .command == $w or .command == $p or .command == $r or .command == $lw or .command == $lp) then
+                    .hooks |= map(select(.command != $w and .command != $p and .command != $r and .command != $lw and .command != $lp)) |
                     select(.hooks | length > 0)
                 else . end
             )

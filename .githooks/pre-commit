@@ -168,4 +168,8 @@ for i in "${!LEAK_GLOBS[@]}"; do
     fi
 done
 
+# Tests before commit when code, tests or skill are staged (helper; PARACHUTE_SKIP_TESTS=1 skips).
+# Shared logic and the tag-consistency exemption live in run-tests-on-commit.
+bash "$(dirname "$0")/run-tests-on-commit" || exit 1
+
 exit 0

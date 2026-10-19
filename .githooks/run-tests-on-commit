@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# run-tests-on-commit — "tests before commit". Called from .githooks/pre-commit.
+#
+# Runs tests/run-tests.sh only when the staged paths touch code or tests
+# (hooks/, install.sh, uninstall.sh, tests/, skill/). Quiet unless it fails.
+# Skip once with: PARACHUTE_SKIP_TESTS=1 git commit ...
+#
+# The tag-consistency check fails by design between a VERSION bump and the tag
+# that does not exist yet ("git tag (X) matches VERSION (Y)"). Exactly that one
+# failure line is reported and does not block. Any other failure blocks.
+# Blocking is limited to this helper; .githooks/pre-push never blocks.
+
+set -u
+
+[[ "${PARACHUTE_SKIP_TESTS:-}" == "1" ]] && { echo "[tests] skipped (PARACHUTE_SKIP_TESTS=1)"; exit 0; }
+
+# Git may export GIT_INDEX_FILE / GIT_DIR into hooks; the suite creates its own
+# repositories and must never touch this commit's index.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$root" || exit 0
+
+staged="$(git diff --cached --name-only)"
+printf '%s\n' "$staged" | grep -qE '^(hooks/|install\.sh$|uninstall\.sh$|tests/|skill/)' || exit 0
+
+out="$(mktemp)" || { echo "[tests] cannot create a temporary file; commit blocked"; exit 1; }
+trap 'rm -f "$out"' EXIT
+
+if command -v timeout >/dev/null 2>&1; then
+    timeout 180 bash tests/run-tests.sh >"$out" 2>&1
+else
+    bash tests/run-tests.sh >"$out" 2>&1
+fi
+rc=$?
+(( rc == 0 )) && exit 0
+
+clean="$(sed 's/\x1b\[[0-9;]*m//g' "$out")"
+tag_re='^  FAIL git tag \([^()]*\) matches VERSION \([^()]*\)$'
+tag_count="$(printf '%s\n' "$clean" | grep -cE "$tag_re" || true)"
+other="$(printf '%s\n' "$clean" | grep '^  FAIL ' | grep -vE "$tag_re" || true)"
+
+if [[ -z "$other" && "$tag_count" == "1" ]]; then
+    echo "[tests] only the tag-consistency check failed (VERSION bumped, tag not created yet); commit allowed."
+    exit 0
+fi
+
+echo "[tests] COMMIT BLOCKED - tests/run-tests.sh failed (exit $rc). Failing checks:"
+printf '%s\n' "$clean" | grep -E '^  FAIL |^Failed:' || echo "  (no FAIL line; timeout after 180 s or crash)"
+echo "[tests] last output lines:"
+printf '%s\n' "$clean" | tail -n 15
+echo "[tests] Skip once with: PARACHUTE_SKIP_TESTS=1 git commit ..."
+exit 1

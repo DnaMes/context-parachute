@@ -11,6 +11,29 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-20
+
+### Added
+
+- `hooks/parachute-resume.sh` and `./install.sh --with-resume`: a `SessionStart`
+  hook (matcher `compact`) that re-injects one bounded handoff card after an
+  auto-compaction. Other session sources are ignored, so nothing is injected twice.
+- Requested-vs-saved reminder: when the handoff directive was sent and `HANDOFF.md`
+  stayed untouched for `PARACHUTE_REMIND_AFTER` seconds (120), the watcher sends one
+  reminder per compaction cycle.
+- `--doctor` reports the optional resume hook and warns when `HANDOFF.md` exceeds
+  40 KB.
+
+### Changed
+
+- Window auto-grow: with no configured window, observed tokens above the 200000
+  default switch the check to a 1000000 window (with a stderr notice) instead of
+  reporting more than 100 %. An explicit window is never overridden.
+
+### Fixed
+
+- `uninstall.sh` also removes the resume hook registration.
+
 ## [1.2.1] - 2026-10-20
 
 Fixes for three non-blocking findings of the v1.2.0 review gate.

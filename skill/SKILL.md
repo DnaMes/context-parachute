@@ -2,7 +2,7 @@
 name: context-parachute
 description: Auto-eject session handoff. When context fills up (or on demand), write cross-agent continuation artifacts — HANDOFF.md, ready-to-paste continue prompts, and an AGENTS.md block — so any agent (Codex, Gemini, OpenCode, Cursor, or a fresh Claude session) can pick up the work with full context. Use when the context-parachute watcher injects a CONTEXT-PARACHUTE directive, when the user asks to hand off / eject / parachute the session, or before a /clear on a long task.
 metadata:
-  version: "1.2.1"
+  version: "1.3.0"
 ---
 
 # context-parachute
@@ -62,6 +62,13 @@ do not front-load all Reads and defer all Writes to a later batch.
 - **Decisions Made** — each decision **and why**
 - **Files Changed** — path + one-line what/why per file
 - **Next Steps** — clear, ordered action items
+
+**Size budget.** Keep the root `HANDOFF.md` under ~20 KB. Goal, Current Progress
+and Next Steps must fit in its first ~3 KB; place them first if needed. Do not
+grow the file with history: move older sections to
+`.parachute/handoff-archive/<YYYY-MM-DD>.md` (use `<output_dir>` if configured)
+and leave a one-line pointer in `HANDOFF.md`. Keep archives out of the default
+resume path; read them only on request.
 
 ### 2. `<output_dir>/continue.md` — generic continuation prompt
 

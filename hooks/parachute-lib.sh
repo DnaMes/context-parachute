@@ -16,3 +16,21 @@ parachute_last_tokens() {
         | jq -r '(.input_tokens + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))' 2>/dev/null \
         || true
 }
+
+# Modification time (epoch seconds) of a file, 0 if missing. GNU stat, then BSD.
+parachute_mtime() {
+    stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}
+
+# The configured output_dir (global config, then project config), default
+# ".parachute". Invalid values are ignored, like the watcher's loader does.
+parachute_output_dir() {
+    local out=".parachute" cfg o
+    for cfg in "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/parachute.json" "$(pwd)/.parachute/config.json"; do
+        [[ -r "$cfg" ]] || continue
+        o="$(jq -r 'if type == "object" and (.output_dir | type == "string" and length > 0
+            and (explode | all(.[]; . >= 32 and . != 127))) then .output_dir else empty end' "$cfg" 2>/dev/null || true)"
+        [[ -n "$o" ]] && out="$o"
+    done
+    printf '%s' "$out"
+}

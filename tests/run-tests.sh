@@ -501,6 +501,73 @@ jq -nc --arg tr auto --arg s s-subdir --arg cwd "${sub_repo}/pkg/inner" '{trigge
 rm -rf "$sub_repo"
 
 # ---------------------------------------------------------------------------
+section "Window auto-grow, requested-vs-saved reminder, resume card (v1.3.0)"
+
+# Unconfigured window + tokens above the 200k default -> measured against 1M.
+grow_fixture="${RUN_TMP}/grow.jsonl"
+printf '%s\n' '{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":300000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}' > "$grow_fixture"
+input="$(jq -nc --arg t "$grow_fixture" '{transcript_path:$t, session_id:"s-grow"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
+err="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>&1 >/dev/null)"
+[[ "$err" == *"assuming a 1000000-token window"* ]] && ok "300k tokens, no config -> assumes a 1M window and says so" || bad "auto-grow notice (got: ${err:0:80})"
+[[ "$out" != *"CONTEXT-PARACHUTE"* ]] && ok "auto-grow does not fire the parachute at 30%" || bad "auto-grow does not fire the parachute at 30%"
+printf '%s\n' '{"context_window":200000}' > "${RUN_HOME}/.claude/parachute.json" 2>/dev/null || { mkdir -p "${RUN_HOME}/.claude"; printf '%s\n' '{"context_window":200000}' > "${RUN_HOME}/.claude/parachute.json"; }
+input="$(jq -nc --arg t "$grow_fixture" '{transcript_path:$t, session_id:"s-grow2"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
+[[ "$out" == *"CONTEXT-PARACHUTE"* ]] && ok "an explicit window is never auto-grown" || bad "an explicit window is never auto-grown"
+rm -f "${RUN_HOME}/.claude/parachute.json"
+
+# Requested vs saved: reminder once when HANDOFF.md stayed older than the marker.
+rs_dir="$(mktemp -d)"
+rs_run() { jq -nc --arg t "${FIXTURES}/at-80.jsonl" --arg s "$1" --arg cwd "$rs_dir" '{transcript_path:$t, session_id:$s, cwd:$cwd}' \
+    | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" PARACHUTE_REMIND_AFTER="${2:-0}" bash "$WATCH" 2>/dev/null; }
+out="$(rs_run s-remind)"; [[ "$out" == *"CONTEXT-PARACHUTE (v"* ]] && ok "reminder test: directive fires first" || bad "reminder test: directive fires first"
+out="$(rs_run s-remind 3600)"; [[ -z "$out" ]] && ok "no reminder inside the grace period" || bad "no reminder inside the grace period"
+out="$(rs_run s-remind)"
+[[ "$out" == *"CONTEXT-PARACHUTE reminder"* ]] && ok "reminder when HANDOFF.md was not updated after the directive" || bad "reminder when HANDOFF.md was not updated after the directive (got: ${out:0:60})"
+out="$(rs_run s-remind)"; [[ -z "$out" ]] && ok "the reminder is sent only once" || bad "the reminder is sent only once"
+rs_run s-saved >/dev/null
+printf '# handoff\n' > "${rs_dir}/HANDOFF.md"; touch -d '+1 minute' "${rs_dir}/HANDOFF.md"
+out="$(rs_run s-saved)"; [[ -z "$out" ]] && ok "no reminder once HANDOFF.md was written" || bad "no reminder once HANDOFF.md was written (got: ${out:0:60})"
+: > "${RUN_TMP}/context-parachute/s-remind.fired"; : > "${RUN_TMP}/context-parachute/s-remind.remind"
+jq -nc --arg tr manual --arg s s-remind '{trigger:$tr, session_id:$s}' | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$PRECOMPACT" 2>/dev/null
+[[ ! -e "${RUN_TMP}/context-parachute/s-remind.remind" ]] && ok "compaction re-arms the reminder too" || bad "compaction re-arms the reminder too"
+
+# Resume card.
+RESUME="${REPO_DIR}/hooks/parachute-resume.sh"
+mkdir -p "${rs_dir}/.parachute"; printf 'CARD-HANDOFF %s\n' "$(head -c 5000 /dev/zero | tr '\0' 'x')" > "${rs_dir}/HANDOFF.md"
+res() { jq -nc --arg src "$1" --arg cwd "$rs_dir" '{source:$src, cwd:$cwd, session_id:"s-res"}' | HOME="$RUN_HOME" bash "$RESUME" 2>/dev/null; }
+out="$(res startup)"; [[ -z "$out" ]] && ok "resume hook ignores source=startup (no double injection)" || bad "resume hook ignores source=startup"
+out="$(res compact)"
+[[ "$out" == *"resume card"* && "$out" == *"CARD-HANDOFF"* ]] && ok "resume hook injects HANDOFF.md after compaction" || bad "resume hook injects HANDOFF.md after compaction"
+(( ${#out} < 3400 )) && ok "resume card is bounded (<3.4 KB)" || bad "resume card is bounded (got ${#out} bytes)"
+printf 'CARD-CONTINUE\n' > "${rs_dir}/.parachute/continue-claude.md"
+out="$(res compact)"; [[ "$out" == *"CARD-CONTINUE"* && "$out" != *"CARD-HANDOFF"* ]] && ok "resume card prefers continue-claude.md" || bad "resume card prefers continue-claude.md"
+printf 'snap\n' > "${rs_dir}/.parachute/emergency.md"
+out="$(res compact)"; [[ "$out" == *"emergency.md"* ]] && ok "resume card points to the emergency snapshot" || bad "resume card points to the emergency snapshot"
+touch -d '30 days ago' "${rs_dir}/.parachute/continue-claude.md"
+out="$(res compact)"; [[ "$out" == *"STALE"* ]] && ok "stale resume card is labelled STALE" || bad "stale resume card is labelled STALE"
+rm -rf "${rs_dir:?}/.parachute" "${rs_dir}/HANDOFF.md"
+out="$(res compact)"; [[ -z "$out" ]] && ok "resume hook is silent without any handoff" || bad "resume hook is silent without any handoff"
+rm -rf "$rs_dir"
+
+# Installer: --with-resume uses the compact matcher; doctor reports it; uninstall removes it.
+ri_home="$(mktemp -d)"; mkdir -p "${ri_home}/.claude"
+HOME="$ri_home" bash "${REPO_DIR}/install.sh" --with-resume >/dev/null 2>&1
+jq -e --arg c "bash '${REPO_DIR}/hooks/parachute-resume.sh'" '.hooks.SessionStart | any(.[]; .matcher == "compact" and any(.hooks[]?; .command == $c))' "${ri_home}/.claude/settings.json" >/dev/null 2>&1 \
+    && ok "--with-resume registers SessionStart with matcher compact" || bad "--with-resume registers SessionStart with matcher compact"
+out="$(HOME="$ri_home" bash "${REPO_DIR}/install.sh" --doctor 2>&1)"
+[[ "$out" == *"ok    SessionStart: parachute-resume.sh"* ]] && ok "doctor sees the resume hook" || bad "doctor sees the resume hook"
+big_repo="$(mktemp -d)"; git -C "$big_repo" init -q 2>/dev/null; head -c 50000 /dev/zero | tr '\0' 'x' > "${big_repo}/HANDOFF.md"
+out="$(cd "$big_repo" && HOME="$ri_home" bash "${REPO_DIR}/install.sh" --doctor 2>&1)"
+[[ "$out" == *"HANDOFF.md is "*"KB"* ]] && ok "doctor warns about an oversized HANDOFF.md" || bad "doctor warns about an oversized HANDOFF.md"
+rm -rf "$big_repo"
+HOME="$ri_home" bash "${REPO_DIR}/uninstall.sh" >/dev/null 2>&1
+jq -e '(.hooks // {}) | has("SessionStart") | not' "${ri_home}/.claude/settings.json" >/dev/null 2>&1 \
+    && ok "uninstall removes the resume hook" || bad "uninstall removes the resume hook"
+rm -rf "$ri_home"
+
+# ---------------------------------------------------------------------------
 section "Version consistency (VERSION == CHANGELOG == tag)"
 
 VERSION_FILE="${REPO_DIR}/VERSION"
@@ -532,7 +599,7 @@ fi
 section "shellcheck"
 
 if command -v shellcheck >/dev/null 2>&1; then
-    for s in "$WATCH" "$PRECOMPACT" "${REPO_DIR}/hooks/parachute-lib.sh" "${REPO_DIR}/install.sh" "${REPO_DIR}/uninstall.sh" "${BASH_SOURCE[0]}"; do
+    for s in "$WATCH" "$PRECOMPACT" "${REPO_DIR}/hooks/parachute-lib.sh" "${REPO_DIR}/hooks/parachute-resume.sh" "${REPO_DIR}/install.sh" "${REPO_DIR}/uninstall.sh" "${BASH_SOURCE[0]}"; do
         if shellcheck -S warning "$s" >/dev/null 2>&1; then
             ok "shellcheck $(basename "$s")"
         else

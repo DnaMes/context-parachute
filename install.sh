@@ -8,6 +8,7 @@
 #   ./install.sh                  install
 #   ./install.sh --with-posttool  also register the watcher as a PostToolUse hook
 #                                 (covers long tool loops without prompts)
+#   ./install.sh --with-resume    also register the SessionStart(compact) resume card hook
 #   ./install.sh --doctor         read-only health check, changes nothing
 set -euo pipefail
 
@@ -28,11 +29,13 @@ VERSION="unknown"
 
 DOCTOR=0
 WITH_POSTTOOL=0
+WITH_RESUME=0
 for arg in "$@"; do
     case "$arg" in
         --doctor) DOCTOR=1 ;;
         --with-posttool) WITH_POSTTOOL=1 ;;
-        *) err "unknown option: ${arg} (use --doctor or --with-posttool)" ;;
+        --with-resume) WITH_RESUME=1 ;;
+        *) err "unknown option: ${arg} (use --doctor, --with-posttool or --with-resume)" ;;
     esac
 done
 
@@ -42,22 +45,23 @@ command -v jq >/dev/null 2>&1 || err "jq is required but not found. Install jq a
 # Read-only health check: is each hook registered AND does its script exist?
 # Exits 1 only when a required hook is missing; warnings never fail the run.
 doctor() {
-    local rc=0 spec event script need n path cfg w t tokens pct
+    local rc=0 spec event script need flag n path cfg w t tokens pct hf
     info "context-parachute v${VERSION} — doctor (read-only)"
     if [[ ! -r "$SETTINGS" ]] || ! jq empty "$SETTINGS" 2>/dev/null; then
         info "FAIL  ${SETTINGS} missing or not valid JSON"
         return 1
     fi
-    for spec in UserPromptSubmit:parachute-watch.sh:required PreCompact:parachute-precompact.sh:required \
-                PostToolUse:parachute-watch.sh:optional; do
-        IFS=: read -r event script need <<< "$spec"
+    for spec in UserPromptSubmit:parachute-watch.sh:required: PreCompact:parachute-precompact.sh:required: \
+                PostToolUse:parachute-watch.sh:optional:--with-posttool \
+                SessionStart:parachute-resume.sh:optional:--with-resume; do
+        IFS=: read -r event script need flag <<< "$spec"
         n="$(jq --arg e "$event" --arg s "$script" \
             '[.hooks[$e][]?.hooks[]?.command | strings | select(contains($s))] | length' "$SETTINGS")"
         if (( n == 0 )); then
             if [[ "$need" == required ]]; then
                 info "FAIL  ${event}: ${script} is not registered (run ./install.sh)"; rc=1
             else
-                info "info  ${event}: ${script} not registered (optional; ./install.sh --with-posttool)"
+                info "info  ${event}: ${script} not registered (optional; ./install.sh ${flag})"
             fi
             continue
         fi
@@ -99,6 +103,11 @@ doctor() {
             info "ok    last auto-compaction at ${tokens} tokens = ${pct}% of the window"
         fi
     fi
+    # A huge HANDOFF.md defeats its purpose: only a short head is ever injected.
+    hf="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/HANDOFF.md"
+    if [[ -r "$hf" ]] && (( $(wc -c < "$hf") > 40000 )); then
+        info "warn  ${hf} is $(( $(wc -c < "$hf") / 1024 )) KB: archive older sections to .parachute/handoff-archive/ (keep it under ~20 KB)"
+    fi
     return "$rc"
 }
 
@@ -110,6 +119,7 @@ info "context-parachute v${VERSION} — installer"
 # Claude passes command strings through sh -c: quote paths for that boundary.
 WATCH_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-watch.sh" | jq -Rrs @sh)"
 PRECOMPACT_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-precompact.sh" | jq -Rrs @sh)"
+RESUME_CMD="bash $(printf '%s' "${REPO_DIR}/hooks/parachute-resume.sh" | jq -Rrs @sh)"
 
 # Fail before touching settings if another installation owns the skill path.
 if [[ -L "$SKILL_LINK" ]]; then
@@ -135,16 +145,16 @@ info "Backed up settings.json -> ${BACKUP}"
 # Adds a {matcher,hooks:[{type,command,timeout?}]} block to an event array only
 # if no existing entry already registers the same command string.
 append_hook() {
-    local event="$1" cmd="$2" timeout="$3"
+    local event="$1" cmd="$2" timeout="$3" matcher="${4:-}"
     local tmp
     tmp="$(mktemp "${SETTINGS}.tmp.XXXXXXXX")"
     jq \
-        --arg event "$event" --arg cmd "$cmd" --argjson timeout "$timeout" '
+        --arg event "$event" --arg cmd "$cmd" --argjson timeout "$timeout" --arg matcher "$matcher" '
         .hooks //= {} |
         .hooks[$event] //= [] |
         if (.hooks[$event] | any(.[].hooks[]?; .command == $cmd)) then .
         else .hooks[$event] += [{
-            "matcher": "",
+            "matcher": $matcher,
             "hooks": [ ({ "type": "command", "command": $cmd } + (if $timeout > 0 then {"timeout": $timeout} else {} end)) ]
         }] end
     ' "$SETTINGS" > "$tmp" || err "jq failed while registering ${event} hook"
@@ -173,6 +183,10 @@ info "Registered watcher and snapshot hooks (timeout 5s, idempotent)."
 if (( WITH_POSTTOOL )); then
     append_hook "PostToolUse" "$WATCH_CMD" 5
     info "Registered the watcher for PostToolUse as well (throttled to one check per 30s)."
+fi
+if (( WITH_RESUME )); then
+    append_hook "SessionStart" "$RESUME_CMD" 5 "compact"
+    info "Registered the resume card hook for SessionStart(compact)."
 fi
 
 jq empty "$SETTINGS" 2>/dev/null || err "settings.json became invalid after edit — restore from ${BACKUP}"

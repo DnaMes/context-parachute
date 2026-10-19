@@ -50,7 +50,7 @@ MARKER_DIR="${TMPDIR:-/tmp}/context-parachute"
 if [[ "$(printf '%s' "$STDIN_JSON" | jq -r '.hook_event_name // empty' 2>/dev/null || true)" == "PostToolUse" \
         && -z "${PARACHUTE_INNER:-}" ]]; then
     tick="${MARKER_DIR}/${SESSION_ID}.tick"
-    last="$(stat -c %Y "$tick" 2>/dev/null || stat -f %m "$tick" 2>/dev/null || echo 0)"
+    last="$(parachute_mtime "$tick")"
     (( $(date +%s) - last >= ${PARACHUTE_TICK_SECONDS:-30} )) || exit 0
     mkdir -p "$MARKER_DIR" 2>/dev/null && : > "$tick" 2>/dev/null || true
     inner="$(printf '%s' "$STDIN_JSON" | PARACHUTE_INNER=1 bash "${BASH_SOURCE[0]}" || true)"
@@ -114,6 +114,7 @@ load_config "$(pwd)/.parachute/config.json"
 # No configured window: Claude Code's own auto-compact window is the effective one.
 if (( ! WINDOW_CONFIGURED )) && [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[1-9][0-9]*$ ]]; then
     WINDOW="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+    WINDOW_CONFIGURED=1
 fi
 [[ "$WINDOW" -gt 0 ]] || { warn "context_window <= 0, using 200000"; WINDOW=200000; }
 
@@ -138,16 +139,15 @@ PARACHUTE_FIRED=0
 TOKENS="$(parachute_last_tokens "$TRANSCRIPT")"
 [[ "$TOKENS" =~ ^[0-9]+$ ]] || { warn "no usable assistant usage found in transcript tail"; exit 0; }
 
-PERCENT=$(( TOKENS * 100 / WINDOW ))
-
 # --- guard: default window silently wrong on a 1M-context session -----------
-# WINDOW==200000 means no context_window override was configured (default or
-# explicit). If observed tokens already exceed that, the session is almost
-# certainly running a larger window (e.g. Opus [1m]) and PERCENT is bogus.
-# Warn, but never change the trigger decision below.
-if [[ "$WINDOW" -eq 200000 ]] && (( TOKENS > WINDOW )); then
-    warn "observed tokens ($TOKENS) exceed configured context_window ($WINDOW); if this is a 1M session set context_window: 1000000"
+# No window configured and observed tokens already exceed the 200k default: the
+# session certainly runs a larger window (e.g. Opus [1m]), so measure against 1M
+# instead of reporting a bogus >100%. An explicit window is never overridden.
+if (( ! WINDOW_CONFIGURED )) && (( TOKENS > WINDOW )); then
+    warn "observed tokens ($TOKENS) exceed the default window ($WINDOW); assuming a 1000000-token window (set context_window to override)"
+    WINDOW=1000000
 fi
+PERCENT=$(( TOKENS * 100 / WINDOW ))
 
 # --- advisory stages --------------------------------------------------------
 # The transcript measures input context, not billing or subscription quota.
@@ -185,6 +185,22 @@ EOF
     fi
     break
 done
+
+# --- requested vs saved -----------------------------------------------------
+# The directive only proves a request was emitted. If, a while later, HANDOFF.md
+# is still older than the fired marker, remind once (re-armed by compaction).
+if (( PARACHUTE_FIRED )) && (( PERCENT >= THRESHOLD )) && [[ ! -e "${MARKER_DIR}/${SESSION_ID}.remind" ]]; then
+    root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    fired_at="$(parachute_mtime "$MARKER")"
+    if (( $(date +%s) - fired_at >= ${PARACHUTE_REMIND_AFTER:-120} )) \
+            && (( $(parachute_mtime "${root}/HANDOFF.md") < fired_at )); then
+        : > "${MARKER_DIR}/${SESSION_ID}.remind" 2>/dev/null || true
+        cat <<EOF
+CONTEXT-PARACHUTE reminder: the handoff was requested earlier (context at ${PERCENT}%), but HANDOFF.md
+has not been updated since. Invoke the context-parachute skill now, unless the task is about to finish.
+EOF
+    fi
+fi
 
 # --- decide -----------------------------------------------------------------
 if (( PERCENT >= THRESHOLD )) && (( PARACHUTE_FIRED == 0 )); then

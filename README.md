@@ -117,6 +117,20 @@ last auto-compaction (recorded in
 far below the configured window. Every compaction also re-arms the session's
 markers, so advisories fire again afterwards.
 
+`./install.sh --with-resume` registers a `SessionStart` hook with matcher `compact`.
+After an auto-compaction nothing else re-surfaces the handoff, so this injects one
+bounded card (`<output_dir>/continue-claude.md`, else the repo's `HANDOFF.md`,
+3000 bytes by default, labelled `STALE` after 7 days, plus a pointer to
+`emergency.md`). It ignores `startup`, `resume` and `clear`, so a handoff is never
+injected twice. The doctor also warns when `HANDOFF.md` exceeds 40 KB.
+
+If the watcher asked for a handoff and `HANDOFF.md` was still not touched two
+minutes later, it sends one reminder (once per compaction cycle).
+
+Tunables (environment): `PARACHUTE_TICK_SECONDS` (PostToolUse throttle, 30),
+`PARACHUTE_REMIND_AFTER` (reminder delay in seconds, 120), `PARACHUTE_RESUME_MAX_BYTES`
+(3000), `PARACHUTE_RESUME_MAX_AGE_DAYS` (7).
+
 Uninstall removes only this clone's commands and skill symlink, preserves other
 handlers even within the same block, and keeps the config file:
 
@@ -171,8 +185,11 @@ per-project via `.parachute/config.json`:
 Without a configured `context_window`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (if set) is
 used as the window; an explicit config value always wins.
 
-If the default is left in place and observed tokens exceed it, the watcher emits
-a one-line `WARN:` to stderr as a nudge — it does not change the trigger decision.
+If no window is configured (no `context_window`, no env var) and observed tokens
+exceed the 200000 default, the window is evidently larger: the watcher assumes
+1000000 for that check and says so in a one-line `WARN:` on stderr. An explicitly
+configured window is never overridden. This removes the false "parachute at 16%"
+on 1M sessions, but setting `context_window` stays the reliable way.
 
 ## Related tools
 

@@ -2,101 +2,109 @@
 
 ## Goal
 
-Iterate context-parachute past v1.0.2: ship the escalating-warnings feature
-that was already in production use (measured 2026-08-29 token-burn incident),
-audit the repo for doc/test drift, and cut the release.
+Keep the handoff reliable for long, unattended Claude Code sessions. v1.3.0
+(resume after auto-compaction, requested-vs-saved reminder, 1M window
+auto-grow, doctor size check) is the current release.
 
 ## Current Progress
 
-- **Current host is P15, not E14.** `hostname` and `/etc/hostname` both report
-  `p15`. This maintenance pass traces and removes current-host E14 drift from
-  runtime metadata and active documentation while preserving historical E14
-  evidence and repository paths.
-
-- **P15 drift cleanup is complete for the active surfaces.** Claude telemetry,
-  Spotify identity, systemd metadata, browser bookmark, Yazi/Hypr comments,
-  P15-facing ai-stack docs, and the 1Password wrapper now use P15 or an
-  explicitly documented legacy fallback. Validation: 72 context-parachute tests
-  passed; JSON, systemd units, shell syntax, and Python syntax passed.
-
-- **v1.1.0 shipped.** Two commits landed directly on `main` without a version
-  bump or test run (`6b04e74` feat: escalating 50/70/85% context-cost
-  advisories; `71429cb` fix: prefer `/compact` over close-and-reopen at 85%).
-  This session's audit found and closed the gap:
-  - **Real regression found:** `tests/run-tests.sh` was never re-run after
-    those two commits. 6 of 32 tests failed — not from a code bug in the new
-    feature, but from a pre-existing test-isolation gap this repo's own
-    HANDOFF.md had flagged as a risk on 2026-08-28 and left unfixed: `run_watch`
-    isolated `TMPDIR` but never `HOME`, so it silently read this machine's real
-    `~/.claude/parachute.json` (`context_window: 1000000`, `threshold_percent: 65`
-    — this machine runs 1M sessions). Fixed by isolating `HOME` to a scratch
-    dir for every watcher/precompact invocation, matching the pattern already
-    used for the installer tests.
-  - Two assertions (`at-79`, `cache-heavy`) needed updating, not reverting: 79%
-    is inside the new 70% advisory band, so "fully silent" stopped being the
-    correct expectation once the feature shipped as designed.
-  - Added 3 new fixtures (`at-50`, `at-70`, `at-90`) and 9 assertions covering
-    the escalation stages themselves: mildest/mid/hard-stop wording, per-stage
-    marker suppression (a stage doesn't nag twice), and highest-stage-wins
-    (a session observed once already at 90% gets the 85% message, not 50%'s).
-  - README gained an "Escalating context-cost warnings" section — the feature
-    had zero user-facing docs before this pass.
-  - CHANGELOG `[Unreleased]` had stayed empty across both commits; backfilled
-    as `[1.1.0]`. `VERSION` → `1.1.0`.
-  - Full suite: **50 passed, 0 failed**. Not yet tagged/pushed — ask before
-    pushing (shared state).
-- **v1.0.2 was already shipped and pushed** (Read-before-Write race fix,
-  tagged `v1.0.2`, confirmed via `git log origin/main..main` = empty).
+- **v1.2.0 shipped (2026-10-20, tagged).** `./install.sh --doctor` (read-only
+  health check), PreCompact re-arm (clears `.fired` and advisory markers on
+  auto and manual compaction), compaction log
+  (`${XDG_STATE_HOME:-~/.local/state}/context-parachute/compactions.log`),
+  opt-in PostToolUse mode (`--with-posttool`), `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+  fallback, local git exclude for `emergency.md`.
+- **v1.2.1 shipped (2026-10-20, tagged).** Doctor window precedence (config
+  beats env), paths with spaces in doctor, nested git exclude pattern.
+- **Test baseline (this pass, HEAD `32cba28`):** `bash tests/run-tests.sh` →
+  `96 passed, 0 failed`. The tag-consistency check passes because `v1.2.1`
+  exists.
+- **v1.3.0 (2026-10-20):**
+  (a) `hooks/parachute-resume.sh`, a SessionStart(compact) hook that injects a
+  bounded (≤ 3 KB) card from `.parachute/continue-claude.md` or `HANDOFF.md`
+  after auto-compaction; opt-in via `install.sh --with-resume`.
+  (b) Watcher sends ONE follow-up reminder when the directive fired but
+  `HANDOFF.md` was not updated afterwards ("requested vs saved").
+  (c) Window auto-grows to 1M when observed tokens exceed 200k and no window is
+  configured (an explicit window is never overridden).
+  (d) `--doctor` warns when `HANDOFF.md` exceeds 40 KB.
+- **PostCompact feature is superseded.** The 2026-07-09 spec planned a
+  PostCompact re-arm. PostCompact hooks cannot inject context; the PreCompact
+  re-arm shipped in 1.2.0 instead. The spec now carries a historical note.
+- **Session analysis (4 weeks, 99 sessions, 2026-10):**
+  - 33 auto-compactions, 0 manual. Sessions are long and largely unattended.
+  - The watcher was removed from the owner's global `settings.json` by a
+    harness diet on 2026-09-28, so 0 advisories fired for three weeks. Doctor
+    exists to catch exactly this.
+  - Effective window dropped from 1M to about 200k around 2026-10-15.
+- **Docs refreshed in this pass:** `docs/DESIGN.md`, `docs/RELIABILITY.md`
+  (evidence labelled as fixture / documentation / live), the 2026-07-09 spec
+  note, and a HANDOFF size budget in `skill/SKILL.md`.
+- **Tests before commit:** `.githooks/pre-commit` calls the new
+  `.githooks/run-tests-on-commit` (runs the suite only when `hooks/`,
+  `install.sh`, `uninstall.sh`, `tests/` or `skill/` is staged;
+  `PARACHUTE_SKIP_TESTS=1` skips; exempts exactly the tag-consistency line).
+  Simulated in a scratch clone: docs-only → silent; VERSION+skill bump without
+  tag → allowed; extra failure → blocked; skip var → passed; all green → silent
+  pass. `.githooks/pre-push` never blocks (documented in the file).
+  Active only where `git config core.hooksPath .githooks` is set.
+- **Decision record:** lore memory `context-parachute-v1-3-scope` (decision).
 
 ## Next Steps
 
-0. **Keep P15 drift cleanup bounded.** Do not rewrite dated audits, migration
-   history, retired E14 paths, or the existing service-account identifier unless
-   a deliberate credential rotation is requested.
-
-1. **Tag and push v1.1.0.** `git tag v1.1.0` on current HEAD, then **ask before
-   pushing**.
-2. **Remove the stray backup file** `hooks/parachute-watch.sh.bak-20260828-195311`
-   (untracked, editor-generated, not a documented backup — safe to delete once
-   confirmed the working tree matches what's committed).
-3. **Next planned feature (not yet started, not version-numbered):** reset the
-   parachute fired-marker on `PostCompact` so it re-arms after an auto-compact
-   instead of staying silent for the rest of the session. **GATED:** probe
-   PostCompact stdin for `session_id` first (fallbacks: cwd-key or age-based
-   reset if absent). Design spec already exists:
-   `docs/superpowers/specs/2026-07-09-v1.0.1-and-v1.1.0-design.md` — note its
-   "v1.1.0" label now refers to this *unbuilt* feature, not the escalating
-   warnings that shipped under that version number instead; re-read before
-   resuming to avoid confusing the two.
-4. **Enforce "tests before commit" going forward.** The regression this
-   session found happened because two real commits shipped without running
-   `tests/run-tests.sh` first. Consider a pre-commit hook (`.githooks/pre-commit`
-   already exists in this repo — check whether it runs the suite, and if not,
-   whether it should).
+1. v1.3.0 is released (commit, tag and GitHub release are standing-authorized).
+2. Enable the repo hooks per clone with `git config core.hooksPath .githooks`
+   (done in the maintainer clone, 2026-10-20).
+3. **Canonical identity guard drift:** `.githooks/pre-commit` is a copy of the
+   canonical guard in claude-setup. Apply the same 3-line addition there, or the
+   copies drift.
+4. **NOT VERIFIED — live resume:** whether SessionStart(compact) stdout reaches
+   the model in a real session. Documentation and fixtures only so far.
+5. **Check doctor on every machine:** confirm the watcher and PreCompact hooks
+   are registered (the 2026-09-28 gap).
+6. **Keep HANDOFF.md small:** follow the size budget in `skill/SKILL.md`
+   (≤ 20 KB, current state in the first ~3 KB, older sections archived).
 
 ## What Worked / Decisions
 
-- Root-caused the 6 test failures with `bash -x` tracing rather than guessing —
-  confirmed in one pass that all 6 reduced to the same ambient-config leak, not
-  six separate bugs.
-- Chose to update the two stale assertions (`at-79`, `cache-heavy`) rather than
-  treat the new advisory output as a regression to suppress — the feature is
-  working as designed at 79%; the test's expectation was what was outdated.
-- Kept the parachute directive itself strictly one-shot (unchanged) while
-  making the advisory stages repeatable-until-acknowledged — these serve
-  different purposes (one handoff-trigger vs. ongoing cost awareness) and
-  conflating their marker semantics would have been wrong.
+- **Scope decisions for v1.3 (recorded in lore):** no statusline bridge; no
+  semantic PreCompact card (PreCompact has no model turn, so the snapshot stays
+  mechanical); no secret redaction (regexes cannot guarantee sanitization, so
+  the docs make no such claim); no cross-tool adapters; no Stop-hook handoff
+  forcing; never block compaction (PreCompact always exits 0); single injection
+  owner per event (UserPromptSubmit/PostToolUse → watcher, SessionStart(compact)
+  → resume, PreCompact never injects).
+- **Does not work:** PostCompact cannot inject context. PreCompact stdout is not
+  a model-context channel. Reading the destination project's `VERSION` for the
+  footer identifies the wrong product, so artifacts use the loaded skill's
+  `metadata.version`.
+- **Test isolation is load-bearing.** An ambient `~/.claude/parachute.json`
+  (`context_window: 1000000`) made 6 tests fail on 2026-08-29. Every watcher and
+  PreCompact run uses a scratch `HOME` and `TMPDIR`; keep it that way.
+- **Tag-consistency is by design.** A VERSION bump before its tag fails
+  `git tag (X) matches VERSION (Y)`. The helper exempts only that exact line.
+  Do not edit `tests/` to make it pass.
+- Verification means real runs: root-cause with `bash -x` before changing
+  assertions; update an assertion only when the behavior change is intended.
 
-## Files Changed (this arc)
+## Files Changed (this pass)
 
-- `hooks/parachute-watch.sh` — escalating 50/70/85% advisories + compact-vs-close
-  wording fix (already committed: `6b04e74`, `71429cb`).
-- `tests/run-tests.sh` — HOME isolation for `run_watch`/`run_precompact`; updated
-  `at-79`/`cache-heavy` assertions; new escalation-stage test section.
-- `tests/fixtures/at-50.jsonl`, `at-70.jsonl`, `at-90.jsonl` — new fixtures.
-- `README.md` — new "Escalating context-cost warnings" section.
-- `CHANGELOG.md`, `VERSION` — `1.1.0` entry and bump.
-- `HANDOFF.md` — this file, brought current (was stale since 2026-07-21).
+- `HANDOFF.md` — rewritten: stale v1.1.0-untagged, host-drift, backup-file and
+  "ask before pushing" items removed; v1.2.x and v1.3.0 state recorded.
+- `docs/DESIGN.md` — PostToolUse no longer a non-goal; re-arm, log, doctor,
+  resume design (planned 1.3.0), single-injection-owner and never-block rules;
+  test description corrected (bash runner, not bats).
+- `docs/RELIABILITY.md` — re-arm and "no rearm" limit corrected; doctor, log,
+  owner and never-block rules; evidence levels labelled.
+- `docs/superpowers/specs/2026-07-09-v1.0.1-and-v1.1.0-design.md` — historical
+  note: the PostCompact re-fire shipped as a PreCompact re-arm in 1.2.0.
+- `skill/SKILL.md` — HANDOFF.md size-budget rule in artifact 1 (body only;
+  `metadata.version` untouched).
+- `.githooks/run-tests-on-commit` (new) — "tests before commit" helper.
+- `.githooks/pre-commit` — 3-line call to the helper before the final `exit 0`.
+- Not touched by this pass: `hooks/`, `install.sh`, `uninstall.sh`, `tests/`,
+  `README.md`, `CHANGELOG.md`, `VERSION`. Parent-session edits to some of these
+  are visible in `git status` and are not part of this pass.
 
 ---
-_generated by context-parachute v1.1.0 (updated by hand, dogfooding the format)_
+_generated by context-parachute v1.3.0 (updated by hand, dogfooding the format)_
