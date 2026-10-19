@@ -1,0 +1,1 @@
+{"type":"message","message":{"role":"assistant","stopReason":"stop","usage":{"input":2000,"output":500,"cacheRead":798000,"cacheWrite":0,"totalTokens":800500}}}

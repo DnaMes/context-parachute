@@ -120,15 +120,15 @@ Runs on every compaction, `auto` and `manual`. Always exits 0. **[fixture]**
   of the original design was dropped: PreCompact stdout does not reach the model
   reliably. **[docs]**
 
-### 4. Resume hook (planned 1.3.0 — `hooks/parachute-resume.sh`) [planned]
+### 4. Resume hook (`hooks/parachute-resume.sh`, shipped 1.3.0)
 
 - Event: `SessionStart` with matcher `compact`, i.e. after an auto-compaction.
 - Injects a bounded card, at most 3 KB, from `.parachute/continue-claude.md` if it
   exists, otherwise from the head of `HANDOFF.md`. It never injects the whole file.
 - Opt-in: `install.sh --with-resume`. Not registered by default.
 - The card is a pointer plus the current next step, not a summary generator.
-- Status: code is in progress in the parent session. Whether SessionStart(compact)
-  stdout reaches the model is **[docs]** only. **NOT VERIFIED live.**
+- Status: shipped. Whether SessionStart(compact) stdout reaches the model is
+  **[docs]**; this session's own post-compaction card is an observation, not a test.
 
 ### 5. Installer, uninstaller, doctor
 
@@ -137,7 +137,7 @@ Runs on every compaction, `auto` and `manual`. Always exits 0. **[fixture]**
   to `~/.claude/skills/context-parachute/`. A conflicting skill path aborts before
   settings change. **[fixture]**
 - Options: `--with-posttool` (shipped 1.2.0), `--doctor` (shipped 1.2.0),
-  `--with-resume` (planned 1.3.0).
+  `--with-resume` (shipped 1.3.0).
 - `--doctor` is read-only. It reports whether the watcher and PreCompact hooks are
   registered and their scripts readable, the effective window, and whether the
   last auto-compaction happened far below the window. It exits 1 only when a
@@ -158,7 +158,7 @@ Runs on every compaction, `auto` and `manual`. Always exits 0. **[fixture]**
 - **Single injection owner per event.** Each event has at most one hook that
   injects text into the model context:
   - UserPromptSubmit and PostToolUse → the watcher (advisories and directive).
-  - SessionStart(compact) → the resume hook (planned 1.3.0).
+  - SessionStart(compact) → the resume hook (shipped 1.3.0).
   - PreCompact → never injects. It only writes files and markers.
   Two injectors on one event would double the context and race each other.
 - **Mechanical hooks write files; the model writes meaning.** Hooks never claim to
@@ -190,13 +190,30 @@ context-parachute/
 │   ├── parachute-watch.sh        # UserPromptSubmit (+ PostToolUse mode)
 │   ├── parachute-precompact.sh   # PreCompact: re-arm, log, auto snapshot
 │   ├── parachute-lib.sh          # shared token measurement and config helpers
-│   └── parachute-resume.sh       # planned 1.3.0 (SessionStart compact)
+│   └── parachute-resume.sh       # SessionStart compact resume card
 ├── skill/SKILL.md                # the parachute skill (metadata.version)
 ├── config/parachute.default.json
 ├── .githooks/                    # pre-commit (tests), pre-push (never blocks)
 ├── docs/                         # DESIGN, RELIABILITY, RELATED-TOOLS, specs
 └── tests/run-tests.sh + fixtures/
 ```
+
+### 6. Other tools (1.4.0 — `install-host.sh`, `hooks/parachute-host.sh`, `integrations/pi/`)
+
+One bash+jq code base; each host gets the thinnest possible adapter.
+
+- Codex: the core hooks are registered directly (same hook schema as Claude) with
+  `PARACHUTE_HOST=codex`; the one-time `/hooks` trust cannot be automated.
+- Pi: a TypeScript extension spawns the same hooks (`before_agent_start` injects a hidden
+  message, `session_before_compact` snapshots, `session_compact` queues the resume card).
+- Gemini CLI, agy, Cursor: `parachute-host.sh <host> <Event>` normalises the payload,
+  runs the core hook and wraps its text in the host's response format. Hosts without a
+  post-compaction injection event get a `<sid>.compacted` marker; the next prompt event
+  injects the resume card. agy detects compaction by `CHECKPOINT` records and has no
+  PreCompact event (no emergency snapshot). Cursor transcripts have no token usage, so
+  `afterAgentResponse` usage is recorded in an adapter file.
+- Context window: `PARACHUTE_CONTEXT_WINDOW` from the adapter (gemini 524288, agy 250000,
+  Cursor from `preCompact`, Pi from `ctx.getContextUsage()`); Codex's rollout carries its own.
 
 ## Out of scope
 
@@ -205,12 +222,10 @@ context-parachute/
 - **Semantic PreCompact card** — PreCompact has no model turn; semantic content
   stays in the skill-written artifacts.
 - **Secret redaction** — not guaranteed by regexes (see Rules).
-- **Cross-tool adapters** — the artifacts are plain files; other tools read them
-  (AGENTS.md natively, or via paste).
 - **Stop-hook handoff forcing** — a forced write at stop would block or delay the
   session; the watcher's reminder is the bounded alternative.
-- **Per-agent prompts** (`continue-codex.md`, `continue-gemini.md`) — the generic
-  prompt and AGENTS.md cover those targets.
+- **Per-agent prompts** — only `continue.md` and `continue-claude.md` are generated;
+  `parachute-resume.sh --tool NAME` also reads a hand-written `continue-NAME.md`.
 - **Continuous per-turn state maintenance** — token cost on every turn.
 - **Plugin marketplace packaging** — plain installer first.
 

@@ -11,6 +11,27 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-20
+
+### Added
+
+- Other tools: `install-host.sh <codex|pi|gemini|cursor|agy|all> [--uninstall|--doctor]`
+  registers the watcher, PreCompact snapshot and resume card with Codex, Pi, Gemini CLI,
+  Cursor and agy (backups before editing foreign configs; Codex needs a one-time `/hooks` trust).
+- `hooks/parachute-host.sh`: shim for Gemini CLI, agy and Cursor that normalises each host's
+  payload and response dialect and leaves a `.compacted` marker so the next prompt injects the resume card.
+- `integrations/pi/context-parachute.ts`: Pi extension (live smoke test: `tests/pi-extension-smoke.sh`).
+- `parachute_last_usage` reads Claude Code, Codex rollout, Pi, Gemini, agy and adapter
+  transcripts, and invalidates usage recorded before a compaction record.
+- `PARACHUTE_HOST`, `PARACHUTE_CONTEXT_WINDOW`, `PARACHUTE_GEMINI_WINDOW`, `PARACHUTE_AGY_WINDOW`.
+- `parachute-resume.sh --tool NAME` picks `continue-NAME.md`, then `continue.md`, then `HANDOFF.md`.
+
+### Changed
+
+- Window precedence: config > `PARACHUTE_CONTEXT_WINDOW` > `CLAUDE_CODE_AUTO_COMPACT_WINDOW` >
+  window from the transcript > 200000.
+- The directive says "read and follow skill/SKILL.md" for hosts other than Claude Code.
+
 ## [1.3.2] - 2026-10-20
 
 ### Fixed

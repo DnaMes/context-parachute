@@ -1,0 +1,3 @@
+{"type":"user","content":"hi"}
+{"type":"gemini","content":"a","tokens":{"input":120000,"output":50,"cached":100000,"thoughts":0,"tool":0,"total":120050}}
+{"type":"gemini","content":"b","tokens":{"input":524000,"output":10,"cached":0,"thoughts":0,"tool":0,"total":524010}}

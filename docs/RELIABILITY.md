@@ -53,7 +53,7 @@ Each event has at most one hook that injects text into the model context:
 | Event | Injector |
 |---|---|
 | UserPromptSubmit, PostToolUse | watcher (advisories, directive, planned reminder) |
-| SessionStart with matcher `compact` | resume card (planned 1.3.0) |
+| SessionStart with matcher `compact` | resume card (shipped 1.3.0) |
 | PreCompact | none (writes files and markers only) |
 
 Two injectors on the same event would double the context and could race. A new
@@ -84,7 +84,7 @@ Planned 1.3.0: doctor warns when `HANDOFF.md` exceeds 40 KB. **[planned]**
 - The effective window changed in the 4-week session data (about 1M to about 200k
   around 2026-10-15). **[live]** Keep the window configurable; do not hard-code one.
 
-## Resume after compaction (planned 1.3.0)
+## Resume after compaction (shipped 1.3.0)
 
 - `hooks/parachute-resume.sh` on `SessionStart` with matcher `compact`.
 - Injects at most 3 KB from `.parachute/continue-claude.md`, else from the head of
@@ -93,7 +93,7 @@ Planned 1.3.0: doctor warns when `HANDOFF.md` exceeds 40 KB. **[planned]**
 - **NOT VERIFIED live.** Whether SessionStart stdout reaches the model after a real
   compaction rests on **[docs]** and fixtures only.
 
-## Reminder: requested vs saved (planned 1.3.0)
+## Reminder: requested vs saved (shipped 1.3.0)
 
 If the directive fired but `HANDOFF.md` was not updated afterwards, the watcher
 sends ONE follow-up reminder. It does not repeat. **[planned]**
@@ -146,6 +146,19 @@ with an unrelated `9.9.9` version: all four artifact types used the bundled
 `1.1.0` version and preserved existing AGENTS rules. That validates the prompt
 scenarios at that time, not every model or future host release. Evidence: an
 agent-run prompt check, 2026-07; not part of the suite and not a live session.
+
+Evidence per host (1.4.0, `install-host.sh`):
+
+- **Claude Code**: live (this tool's own sessions).
+- **Pi**: live. `tests/pi-extension-smoke.sh` (two real model calls) showed the model
+  quoting the injected directive. Compaction handlers: harness test with a fake context only.
+- **Codex**: hook invocation and payload keys observed live through a config override;
+  the watcher parsed a real rollout. **NOT VERIFIED:** that the injected text reaches
+  the model, and the trusted `~/.codex/hooks.json` path.
+- **Gemini CLI, Cursor, agy**: **[fixture]** and **[docs]** only. The parsers were checked
+  on fixtures (agy also on one real transcript); the hooks were not seen firing in a live
+  session (Cursor's did not fire in `cursor-agent -p`). Cursor `additional_context` and
+  `afterAgentResponse` token semantics are hypotheses.
 
 Limits that remain:
 

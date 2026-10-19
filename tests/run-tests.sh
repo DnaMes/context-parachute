@@ -320,7 +320,7 @@ rm -rf "$inst_scratch"
 quoted_repo="${RUN_TMP}/clone with 'quotes'"
 mkdir -p "$quoted_repo"
 cp -R "${REPO_DIR}/hooks" "${REPO_DIR}/skill" "${REPO_DIR}/config" "$quoted_repo/"
-cp "${REPO_DIR}/install.sh" "${REPO_DIR}/uninstall.sh" "${REPO_DIR}/VERSION" "$quoted_repo/"
+cp "${REPO_DIR}/install.sh" "${REPO_DIR}/install-host.sh" "${REPO_DIR}/uninstall.sh" "${REPO_DIR}/VERSION" "$quoted_repo/"
 quoted_home="${RUN_TMP}/quoted-home"
 HOME="$quoted_home" bash "${quoted_repo}/install.sh" >/dev/null 2>&1
 HOME="$quoted_home" bash "${quoted_repo}/install.sh" >/dev/null 2>&1
@@ -591,6 +591,100 @@ HOME="$il_home" bash "${REPO_DIR}/install.sh" >/dev/null 2>&1 && bad "installer 
 rm -rf "$il_home"
 
 # ---------------------------------------------------------------------------
+section "Other hosts: Codex rollout and Pi session transcripts (v1.4.0)"
+usage() { bash -c 'source "$1"; parachute_last_usage "$2"' _ "${REPO_DIR}/hooks/parachute-lib.sh" "$1"; }
+[[ "$(usage "${FIXTURES}/codex-380k.jsonl")" == "380900 475000" ]] && ok "Codex: total_tokens and model_context_window" || bad "Codex: total_tokens and model_context_window"
+[[ -z "$(usage "${FIXTURES}/codex-compacted.jsonl")" ]] && ok "Codex: usage before a compacted record is stale" || bad "Codex: usage before a compacted record is stale"
+[[ "$(usage "${FIXTURES}/codex-after-compact.jsonl")" == "30100 475000" ]] && ok "Codex: usage after a compacted record counts" || bad "Codex: usage after a compacted record counts"
+[[ "$(usage "${FIXTURES}/pi-800k.jsonl")" == "800000 0" ]] && ok "Pi: input + cacheRead (output excluded), no window" || bad "Pi: input + cacheRead (got: $(usage "${FIXTURES}/pi-800k.jsonl"))"
+[[ -z "$(usage "${FIXTURES}/pi-compacted.jsonl")" ]] && ok "Pi: usage before a compaction record is stale" || bad "Pi: usage before a compaction record is stale"
+[[ "$(usage "${FIXTURES}/at-80.jsonl")" == "160000 0" ]] && ok "Claude Code transcript still parses" || bad "Claude Code transcript still parses"
+out="$(run_watch codex-380k.jsonl s-codex)"
+[[ "$out" == *"80% of the 475000-token window"* ]] && ok "watcher uses the Codex window from the transcript (80% of 475000)" || bad "watcher uses the Codex window from the transcript (got: ${out:0:80})"
+input="$(jq -nc --arg t "${FIXTURES}/pi-800k.jsonl" '{transcript_path:$t, session_id:"s-pi"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" PARACHUTE_CONTEXT_WINDOW=1000000 bash "$WATCH" 2>/dev/null)"
+[[ "$out" == *"80% of the 1000000-token window"* ]] && ok "PARACHUTE_CONTEXT_WINDOW sets the window (Pi 800k of 1M)" || bad "PARACHUTE_CONTEXT_WINDOW sets the window (got: ${out:0:80})"
+printf '%s\n' '{"context_window":2000000}' > "${RUN_HOME}/.claude/parachute.json" 2>/dev/null || { mkdir -p "${RUN_HOME}/.claude"; printf '%s\n' '{"context_window":2000000}' > "${RUN_HOME}/.claude/parachute.json"; }
+input="$(jq -nc --arg t "${FIXTURES}/codex-380k.jsonl" '{transcript_path:$t, session_id:"s-cfgwin"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" PARACHUTE_CONTEXT_WINDOW=1000000 bash "$WATCH" 2>/dev/null)"
+[[ -z "$out" ]] && ok "configured context_window beats host window and transcript window" || bad "configured context_window beats host window and transcript window"
+rm -f "${RUN_HOME}/.claude/parachute.json"
+
+[[ "$(usage "${FIXTURES}/gemini-524k.jsonl")" == "524000 0" ]] && ok "Gemini: last gemini message tokens.input" || bad "Gemini: last gemini message tokens.input"
+[[ "$(usage "${FIXTURES}/agy-250k.jsonl")" == "250000 0" ]] && ok "agy: input_tokens + cache_read_tokens" || bad "agy: input_tokens + cache_read_tokens"
+[[ -z "$(usage "${FIXTURES}/agy-checkpoint.jsonl")" ]] && ok "agy: usage before a CHECKPOINT record is stale" || bad "agy: usage before a CHECKPOINT record is stale"
+[[ "$(usage "${FIXTURES}/adapter-usage.jsonl")" == "150000 0" ]] && ok "adapter state file: last parachute_usage record" || bad "adapter state file: last parachute_usage record"
+out="$(printf '%s' "$(jq -nc --arg t "${FIXTURES}/codex-380k.jsonl" '{transcript_path:$t, session_id:"s-host"}')" | PARACHUTE_HOST=codex TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
+[[ "$out" == *"Read and follow "*"/skill/SKILL.md NOW"* ]] && ok "non-Claude host: directive points at SKILL.md" || bad "non-Claude host: directive points at SKILL.md (got: ${out:0:120})"
+out="$(run_watch at-90.jsonl s-claude-host)"
+[[ "$out" == *"Invoke the context-parachute skill NOW"* ]] && ok "Claude host: directive invokes the skill" || bad "Claude host: directive invokes the skill"
+tr_dir="$(mktemp -d)"; mkdir -p "${tr_dir}/.parachute"; printf 'GENERIC\n' > "${tr_dir}/.parachute/continue.md"; printf 'CLAUDE\n' > "${tr_dir}/.parachute/continue-claude.md"
+tres() { jq -nc --arg cwd "$tr_dir" '{source:"compact", cwd:$cwd}' | HOME="$RUN_HOME" bash "${REPO_DIR}/hooks/parachute-resume.sh" "$@" 2>/dev/null; }
+out="$(tres --tool codex)"; [[ "$out" == *"GENERIC"* && "$out" != *"CLAUDE"* ]] && ok "resume --tool codex falls back to continue.md" || bad "resume --tool codex falls back to continue.md"
+out="$(tres)"; [[ "$out" == *"CLAUDE"* ]] && ok "resume default tool is claude" || bad "resume default tool is claude"
+rm -rf "$tr_dir"
+
+# ---------------------------------------------------------------------------
+section "Host adapter: Gemini CLI, agy, Cursor (v1.4.0)"
+HOST_SH="${REPO_DIR}/hooks/parachute-host.sh"
+hs_dir="$(mktemp -d)"; mkdir -p "${hs_dir}/.parachute"; printf 'HOSTCARD\n' > "${hs_dir}/.parachute/continue.md"
+hs() { # host event json
+    printf '%s' "$3" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$HOST_SH" "$1" "$2" 2>/dev/null
+}
+gj() { jq -nc --arg t "${FIXTURES}/$1" --arg c "$hs_dir" --arg s "$2" '{session_id:$s, transcript_path:$t, cwd:$c, trigger:"auto"}'; }
+out="$(hs gemini BeforeAgent "$(gj gemini-524k.jsonl hs-g1)")"
+[[ "$(jq -r '.hookSpecificOutput.hookEventName' <<<"$out" 2>/dev/null)" == "BeforeAgent" && "$out" == *"CONTEXT-PARACHUTE"* ]] \
+    && ok "gemini BeforeAgent: hookSpecificOutput.additionalContext with the directive" || bad "gemini BeforeAgent output (got: ${out:0:100})"
+out="$(hs gemini BeforeAgent "$(gj at-50.jsonl hs-g2)")"; [[ "$out" == "{}" ]] && ok "gemini quiet turn answers {}" || bad "gemini quiet turn answers {} (got: ${out:0:60})"
+out="$(hs gemini PreCompress "$(gj gemini-524k.jsonl hs-g1)")"
+[[ "$out" == "{}" && -e "${RUN_TMP}/context-parachute/hs-g1.compacted" && -e "${hs_dir}/.parachute/emergency.md" ]] \
+    && ok "gemini PreCompress: snapshot, compacted marker, valid JSON" || bad "gemini PreCompress (got: ${out:0:60})"
+out="$(hs gemini BeforeAgent "$(gj at-50.jsonl hs-g1)")"
+[[ "$out" == *"resume card"*"HOSTCARD"* && ! -e "${RUN_TMP}/context-parachute/hs-g1.compacted" ]] \
+    && ok "next prompt injects the resume card once and clears the marker" || bad "resume card after PreCompress (got: ${out:0:100})"
+aj() { jq -nc --arg t "${FIXTURES}/$1" --arg c "$hs_dir" --arg s "$2" '{conversationId:$s, transcriptPath:$t, workspacePaths:[$c]}'; }
+out="$(hs agy PreInvocation "$(aj agy-250k.jsonl hs-a1)")"
+[[ "$(jq -r '.injectSteps[0].ephemeralMessage' <<<"$out" 2>/dev/null)" == *"CONTEXT-PARACHUTE"* ]] && ok "agy PreInvocation: injectSteps ephemeralMessage" || bad "agy PreInvocation (got: ${out:0:100})"
+out="$(hs agy PreInvocation "$(aj agy-250k.jsonl hs-a1)")"; [[ "$out" == "{}" ]] && ok "agy PreInvocation is throttled (30 s)" || bad "agy throttle (got: ${out:0:60})"
+cj() { jq -nc --arg c "$hs_dir" --arg s "$1" --argjson n "${2:-0}" '{conversation_id:$s, workspace_roots:[$c], input_tokens:$n, cache_read_tokens:0, cache_write_tokens:0, trigger:"auto", context_tokens:$n, context_window_size:200000}'; }
+hs cursor afterAgentResponse "$(cj hs-c1 190000)" >/dev/null
+out="$(hs cursor beforeSubmitPrompt "$(cj hs-c1)")"
+[[ "$(jq -r '.continue' <<<"$out" 2>/dev/null)" == "true" && "$(jq -r '.additional_context' <<<"$out" 2>/dev/null)" == *"CONTEXT-PARACHUTE"* ]] \
+    && ok "cursor beforeSubmitPrompt: continue + additional_context from adapter usage" || bad "cursor beforeSubmitPrompt (got: ${out:0:100})"
+out="$(hs cursor beforeSubmitPrompt "$(cj hs-c2)")"; [[ "$out" == '{"continue":true}' ]] && ok "cursor without usage answers continue:true" || bad "cursor without usage (got: ${out:0:60})"
+hs cursor preCompact "$(cj hs-c1 190000)" >/dev/null
+[[ "$(cat "${RUN_TMP}/context-parachute/cursor-hs-c1.window" 2>/dev/null)" == "200000" && -e "${RUN_TMP}/context-parachute/hs-c1.compacted" ]] \
+    && ok "cursor preCompact stores the window and the compacted marker" || bad "cursor preCompact bookkeeping"
+out="$(hs cursor beforeSubmitPrompt "$(cj hs-c1)")"; [[ "$(jq -r '.additional_context' <<<"$out" 2>/dev/null)" == *"resume card"* ]] && ok "cursor resume card after preCompact" || bad "cursor resume card (got: ${out:0:100})"
+out="$(hs gemini BeforeAgent 'garbage')"; [[ "$out" == "{}" ]] && ok "host adapter fails open with valid JSON on garbage input" || bad "host adapter garbage input (got: ${out:0:60})"
+rm -rf "$hs_dir"
+
+# ---------------------------------------------------------------------------
+section "install-host.sh: Codex, Gemini, Cursor, agy, Pi (v1.4.0)"
+IH="${REPO_DIR}/install-host.sh"
+ih_home="$(mktemp -d)"; mkdir -p "${ih_home}/.codex" "${ih_home}/.gemini/config" "${ih_home}/.cursor" "${ih_home}/.pi/agent"
+printf '%s\n' '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"foreign.sh"}]}]}}' > "${ih_home}/.codex/hooks.json"
+printf '%s\n' '{"theme":"x"}' > "${ih_home}/.gemini/settings.json"
+printf '%s\n' '{"session-pipeline":{"enabled":true}}' > "${ih_home}/.gemini/config/hooks.json"
+ih() { HOME="$ih_home" bash "$IH" "$@" 2>&1; }
+ih codex gemini cursor agy >/dev/null; ih codex gemini cursor agy >/dev/null
+out="$(ih --doctor codex gemini cursor agy)"
+[[ "$out" == *"ok    codex: 4 hook"* && "$out" == *"ok    gemini: 3 hook"* && "$out" == *"ok    cursor: 4 hook"* && "$out" == *"ok    agy: 1 hook"* ]] \
+    && ok "install-host registers every host, idempotently (doctor: exact counts)" || bad "install-host registers every host, idempotently"
+jq -e '.hooks.SessionStart | any(.[]; .matcher == "compact" and any(.hooks[]; .command | contains("--tool codex"))) and any(.[]; any(.hooks[]?; .command == "foreign.sh"))' "${ih_home}/.codex/hooks.json" >/dev/null \
+    && ok "codex: compact resume entry added, foreign hook kept" || bad "codex: compact resume entry added, foreign hook kept"
+jq -e 'has("session-pipeline") and has("context-parachute") and (."context-parachute".PreInvocation | length == 1)' "${ih_home}/.gemini/config/hooks.json" >/dev/null \
+    && ok "agy: named entry added next to the existing one" || bad "agy: named entry added next to the existing one"
+jq -e '.theme == "x" and (.hooks.BeforeAgent | length == 1)' "${ih_home}/.gemini/settings.json" >/dev/null && ok "gemini: settings keys preserved" || bad "gemini: settings keys preserved"
+ih --uninstall codex gemini cursor agy >/dev/null
+[[ "$(jq -c . "${ih_home}/.codex/hooks.json")" == '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"foreign.sh"}]}]}}' \
+    && "$(jq -c 'has("session-pipeline") and (has("context-parachute") | not)' "${ih_home}/.gemini/config/hooks.json")" == "true" ]] \
+    && ok "uninstall removes only our entries" || bad "uninstall removes only our entries"
+ih --bogus >/dev/null && bad "install-host rejects unknown arguments" || ok "install-host rejects unknown arguments"
+out="$(HOME="$(mktemp -d)" bash "$IH" codex 2>&1)"; [[ "$out" == *"skip  codex"* ]] && ok "absent host is skipped, not created" || bad "absent host is skipped, not created"
+rm -rf "$ih_home"
+
+# ---------------------------------------------------------------------------
 section "Version consistency (VERSION == CHANGELOG == tag)"
 
 VERSION_FILE="${REPO_DIR}/VERSION"
@@ -622,7 +716,7 @@ fi
 section "shellcheck"
 
 if command -v shellcheck >/dev/null 2>&1; then
-    for s in "$WATCH" "$PRECOMPACT" "${REPO_DIR}/hooks/parachute-lib.sh" "${REPO_DIR}/hooks/parachute-resume.sh" "${REPO_DIR}/install.sh" "${REPO_DIR}/uninstall.sh" "${BASH_SOURCE[0]}"; do
+    for s in "$WATCH" "$PRECOMPACT" "${REPO_DIR}/hooks/parachute-lib.sh" "${REPO_DIR}/hooks/parachute-resume.sh" "${REPO_DIR}/hooks/parachute-host.sh" "${REPO_DIR}/install.sh" "${REPO_DIR}/install-host.sh" "${REPO_DIR}/uninstall.sh" "${BASH_SOURCE[0]}"; do
         if shellcheck -S warning "$s" >/dev/null 2>&1; then
             ok "shellcheck $(basename "$s")"
         else

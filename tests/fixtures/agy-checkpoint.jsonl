@@ -1,0 +1,4 @@
+{"type":"USER_INPUT"}
+{"type":"PLANNER_RESPONSE","input_tokens":2469,"output_tokens":10,"cache_read_tokens":126342}
+{"type":"PLANNER_RESPONSE","input_tokens":2500,"output_tokens":10,"cache_read_tokens":247500}
+{"type":"CHECKPOINT","content":"{{ CHECKPOINT 1 }}"}

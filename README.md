@@ -191,6 +191,33 @@ exceed the 200000 default, the window is evidently larger: the watcher assumes
 configured window is never overridden. This removes the false "parachute at 16%"
 on 1M sessions, but setting `context_window` stays the reliable way.
 
+## Other tools
+
+The core hooks are tool-agnostic bash+jq. `./install-host.sh <codex|pi|gemini|cursor|agy|all>`
+registers them with other agent CLIs (`--doctor` checks, `--uninstall` removes only
+this clone's entries; foreign config files are backed up first, absent hosts are
+skipped by `all`).
+
+| Tool | Mechanism | Watcher | PreCompact snapshot | Resume card | Verified |
+|---|---|---|---|---|---|
+| Codex | `~/.codex/hooks.json`, core hooks directly | prompt + tool | yes | yes (SessionStart `compact`) | hook fires, rollout parsed; model-side injection NOT VERIFIED |
+| Pi | extension `~/.pi/agent/extensions/context-parachute.ts` | prompt + turn end | yes | yes (next turn) | live: directive reached the model (`tests/pi-extension-smoke.sh`) |
+| Gemini CLI | `~/.gemini/settings.json` via `hooks/parachute-host.sh` | prompt + tool | yes | at next prompt | unit tests only |
+| Cursor | `~/.cursor/hooks.json` via `hooks/parachute-host.sh` | prompt + tool | yes | at next prompt | unit tests only; hooks did not fire in `cursor-agent -p` |
+| agy | `~/.gemini/config/hooks.json` via `hooks/parachute-host.sh` | per model call (30 s throttle) | no (no event) | after a checkpoint | parser verified on a real transcript; hook NOT run live |
+
+- **Codex** requires a one-time trust: run `/hooks` in Codex and trust the new entries.
+- Non-Claude hosts get "read and follow `skill/SKILL.md`" in the directive instead of
+  "invoke the skill", and the resume card prefers `continue-<tool>.md`, then `continue.md`.
+- The agy hook is passive (no account rotation or agy automation). Cursor transcripts
+  carry no token usage, so the adapter records `afterAgentResponse` usage itself.
+- Environment: `PARACHUTE_HOST` (set by the adapters), `PARACHUTE_CONTEXT_WINDOW`
+  (adapter-supplied window), `PARACHUTE_GEMINI_WINDOW` (default 524288, the auto-compress
+  point), `PARACHUTE_AGY_WINDOW` (default 250000, the observed checkpoint size). The
+  config `window` still wins over all of them.
+- Hosts without a post-compaction injection event get a `<session>.compacted` marker;
+  the next prompt event injects the resume card.
+
 ## Related tools
 
 The landscape has changed since the original design. Similar projects now include
@@ -210,8 +237,10 @@ concrete ideas worth evaluating; no exclusivity claim is made.
   history is not implemented.
 - Handoff/advisory markers remain one-shot per session, including after compaction.
   A long session may therefore need a manual handoff later.
-- There is no native Codex/Gemini watcher or startup recovery hook in this repo.
-  The portable skill, generic prompt, and `AGENTS.md` block cover manual transfer.
+- Non-Claude tools are supported through `install-host.sh` (see "Other tools") with
+  the verification levels listed there. Cursor, Gemini CLI and agy hooks have not been
+  observed firing in a live session; agy has no PreCompact event, so no emergency
+  snapshot. The portable skill, generic prompt and `AGENTS.md` block remain the manual path.
 
 ## Design
 

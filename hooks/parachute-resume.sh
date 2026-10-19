@@ -6,6 +6,7 @@
 # source=compact: startup/resume/clear are left to whatever already injects
 # HANDOFF.md there, so a handoff is never injected twice.
 #
+# USAGE: parachute-resume.sh [--tool NAME]  (NAME picks continue-NAME.md)
 # CONTRACT: stdin JSON, fields used: .source, .cwd. SessionStart stdout on exit 0
 # is injected as context. FAIL-OPEN: every internal error -> exit 0, no output.
 set -euo pipefail
@@ -14,6 +15,9 @@ warn() { printf 'WARN: context-parachute/resume: %s\n' "$1" >&2; }
 
 # shellcheck source=parachute-lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/parachute-lib.sh" 2>/dev/null || { warn "cannot load parachute-lib.sh"; exit 0; }
+
+TOOL="claude"
+if [[ "${1:-}" == "--tool" && "${2:-}" =~ ^[a-z0-9-]+$ ]]; then TOOL="$2"; fi
 
 STDIN_JSON=""
 [[ -t 0 ]] || STDIN_JSON="$(cat 2>/dev/null || true)"
@@ -31,9 +35,12 @@ root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 out_dir="$(parachute_output_dir)"
 [[ "$out_dir" == /* ]] || out_dir="${root}/${out_dir}"
 
-# Prefer the continuation prompt the skill wrote for a fresh Claude session.
+# Prefer the continuation prompt the skill wrote for this tool (the generic
+# continue.md for tools without a dedicated one), then HANDOFF.md.
 card=""
-for f in "${out_dir}/continue-claude.md" "${root}/HANDOFF.md"; do
+cands=("${out_dir}/continue-${TOOL}.md")
+[[ "$TOOL" == "claude" ]] || cands+=("${out_dir}/continue.md")
+for f in "${cands[@]}" "${root}/HANDOFF.md"; do
     [[ -r "$f" ]] && { card="$f"; break; }
 done
 [[ -n "$card" ]] || exit 0

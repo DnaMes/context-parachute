@@ -2,7 +2,7 @@
 name: context-parachute
 description: Auto-eject session handoff. When context fills up (or on demand), write cross-agent continuation artifacts — HANDOFF.md, ready-to-paste continue prompts, and an AGENTS.md block — so any agent (Codex, Gemini, OpenCode, Cursor, or a fresh Claude session) can pick up the work with full context. Use when the context-parachute watcher injects a CONTEXT-PARACHUTE directive, when the user asks to hand off / eject / parachute the session, or before a /clear on a long task.
 metadata:
-  version: "1.3.2"
+  version: "1.4.0"
 ---
 
 # context-parachute
