@@ -89,7 +89,8 @@ doctor() {
             info "warn  invalid config: ${cfg}"
         fi
     done
-    (( configured )) || { [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[1-9][0-9]*$ ]] && w="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"; }
+    sw="$(jq -r '.autoCompactWindow // empty' "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json" 2>/dev/null || true)"
+    (( configured )) || { [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-$sw}" =~ ^[1-9][0-9]*$ ]] && w="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-$sw}"; }
     info "info  effective context window: ${w}"
 
     # The last AUTO compaction shows where this machine really compacts.

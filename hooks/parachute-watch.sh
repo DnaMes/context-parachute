@@ -114,7 +114,10 @@ load_config "$(pwd)/.parachute/config.json"
 # No configured window: the host's own window is the effective one. Precedence:
 # config > PARACHUTE_CONTEXT_WINDOW (set by a host adapter) > Claude Code's
 # auto-compact window > the window recorded in the transcript (Codex) > default.
-for env_window in "${PARACHUTE_CONTEXT_WINDOW:-}" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}"; do
+# The settings.json key is the same knob as the env var; without it a lowered
+# autoCompactWindow compacts long before a 1M-based threshold ever fires.
+SETTINGS_WINDOW="$(jq -r '.autoCompactWindow // empty' "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json" 2>/dev/null || true)"
+for env_window in "${PARACHUTE_CONTEXT_WINDOW:-}" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" "$SETTINGS_WINDOW"; do
     if (( ! WINDOW_CONFIGURED )) && [[ "$env_window" =~ ^[1-9][0-9]*$ ]]; then
         WINDOW="$env_window"
         WINDOW_CONFIGURED=1

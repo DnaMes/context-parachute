@@ -63,7 +63,7 @@ or a fresh Claude session) can pick up the work.
   500 transcript lines and skips corrupt or partial JSON lines. Subagent
   (`isSidechain`) records are ignored. **[fixture]**
 - **Window:** `context_window` from the global config, then the project's
-  `.parachute/config.json`. If none is configured, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+  `.parachute/config.json`. If none is configured, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or the `autoCompactWindow` key of `settings.json`
   is used. If none is set and the observed tokens already exceed 200k, the
   watcher warns on stderr and assumes 1,000,000. An explicit window is never
   overridden. **[fixture]** Doctor reports the effective window. **[fixture]**

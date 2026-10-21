@@ -182,7 +182,7 @@ per-project via `.parachute/config.json`:
 }
 ```
 
-Without a configured `context_window`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (if set) is
+Without a configured `context_window`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or `autoCompactWindow` in `settings.json` (if set) is
 used as the window; an explicit config value always wins.
 
 If no window is configured (no `context_window`, no env var) and observed tokens

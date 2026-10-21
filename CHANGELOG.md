@@ -11,6 +11,10 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 
 ## [Unreleased]
 
+### Fixed
+
+- Watcher reads `autoCompactWindow` from `settings.json` as the window fallback (after `CLAUDE_CODE_AUTO_COMPACT_WINDOW`). Before, a lowered window made Claude Code compact at ~21% of 1M while the 65% threshold (650k) never fired.
+
 ## [1.4.1] - 2026-10-20
 
 ### Fixed

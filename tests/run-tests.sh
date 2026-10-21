@@ -449,6 +449,11 @@ input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_
 out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 bash "$WATCH" 2>/dev/null)"
 [[ "$out" == *"CONTEXT-PARACHUTE"* ]] && ok "explicit config window beats the env window" || bad "explicit config window beats the env window"
 rm -f "${RUN_HOME}/.claude/parachute.json"
+printf '%s\n' '{"autoCompactWindow":200000}' > "${RUN_HOME}/.claude/settings.json"
+input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-envwin3"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
+[[ "$out" == *"CONTEXT-PARACHUTE"* ]] && ok "settings.json autoCompactWindow sets the window" || bad "settings.json autoCompactWindow sets the window"
+rm -f "${RUN_HOME}/.claude/settings.json"
 
 section "PostToolUse delivery (v1.2.0)"
 
