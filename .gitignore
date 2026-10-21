@@ -2,6 +2,11 @@
 *.fired
 .parachute/emergency.md
 
+# Project session / handoff files (kept on disk, not published)
+HANDOFF.md
+.parachute/
+.obsidian-doc
+
 # Editor / OS cruft
 *.swp
 *~

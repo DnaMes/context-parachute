@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck and jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck jq
+
+      # Matches the repo's own lint contract: tests/run-tests.sh runs
+      # shellcheck at warning severity (SC2015/SC2016 info-level findings are
+      # intentional A||B idioms and single-quoted jq filter strings).
+      - name: Shellcheck all bash hooks and scripts
+        run: >
+          shellcheck -S warning
+          hooks/parachute-watch.sh
+          hooks/parachute-lib.sh
+          hooks/parachute-host.sh
+          hooks/parachute-precompact.sh
+          hooks/parachute-resume.sh
+          install.sh
+          install-host.sh
+          uninstall.sh
+          .githooks/post-merge
+          .githooks/pre-commit
+          .githooks/pre-push
+          .githooks/run-tests-on-commit
+          tests/run-tests.sh
+          tests/pi-extension-smoke.sh
+
+      - name: Run test suite
+        run: bash tests/run-tests.sh
