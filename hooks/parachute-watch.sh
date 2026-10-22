@@ -69,6 +69,7 @@ fi
 THRESHOLD=80
 WINDOW=200000
 WINDOW_CONFIGURED=0
+WINDOW_IS_COMPACT=0   # window is Claude Code's auto-compact window, not the model window
 OUTPUT_DIR=".parachute"
 # Escalating advisory stages, checked before the parachute threshold.
 # WHY: a single one-shot warning at 75% did not stop four parallel sessions
@@ -121,6 +122,7 @@ for env_window in "${PARACHUTE_CONTEXT_WINDOW:-}" "${CLAUDE_CODE_AUTO_COMPACT_WI
     if (( ! WINDOW_CONFIGURED )) && [[ "$env_window" =~ ^[1-9][0-9]*$ ]]; then
         WINDOW="$env_window"
         WINDOW_CONFIGURED=1
+        [[ "$env_window" != "${PARACHUTE_CONTEXT_WINDOW:-}" ]] && WINDOW_IS_COMPACT=1
     fi
 done
 [[ "$WINDOW" -gt 0 ]] || { warn "context_window <= 0, using 200000"; WINDOW=200000; }
@@ -161,6 +163,14 @@ if (( ! WINDOW_CONFIGURED )) && (( TOKENS > WINDOW )); then
     WINDOW=1000000
 fi
 PERCENT=$(( TOKENS * 100 / WINDOW ))
+# WHY: the statusline gauge counts the model window (1M), so "71% of 500000"
+# next to a 35% gauge made the same tokens look like two different numbers.
+# Against the auto-compact window report tokens, not a second percentage.
+if (( WINDOW_IS_COMPACT )); then
+    DESC="~${TOKENS} tokens, auto-compact window ${WINDOW}"
+else
+    DESC="${PERCENT}% of the ${WINDOW}-token window"
+fi
 
 # --- advisory stages --------------------------------------------------------
 # The transcript measures input context, not billing or subscription quota.
@@ -179,7 +189,7 @@ for stage in $STAGE; do
 
     if (( stage >= 85 )); then
         cat <<EOF
-CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): context is high (~${TOKENS} input tokens).
+CONTEXT-BUDGET (${DESC}): context is high (~${TOKENS} input tokens).
 Save the handoff before compacting if a CONTEXT-PARACHUTE directive follows.
 Prefer \`/compact focus on: <current task>\` at the next natural break, after
 preserving decisions and the next step. Continue the user's task; this advisory
@@ -187,12 +197,12 @@ does not require stopping work. Context size is not a billing or quota estimate.
 EOF
     elif (( stage >= 70 )); then
         cat <<EOF
-CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): the latest input contains ~${TOKENS} tokens.
+CONTEXT-BUDGET (${DESC}): the latest input contains ~${TOKENS} tokens.
 Plan to preserve task state and use \`/compact focus on: <task>\` at a natural break.
 EOF
     else
         cat <<EOF
-CONTEXT-BUDGET (${PERCENT}% of ${WINDOW}): context is growing (~${TOKENS} input tokens).
+CONTEXT-BUDGET (${DESC}): context is growing (~${TOKENS} input tokens).
 Keep large reads focused and retain the next concrete step for a later handoff.
 EOF
     fi
@@ -215,7 +225,7 @@ if (( PARACHUTE_FIRED )) && (( PERCENT >= THRESHOLD )) && [[ ! -e "${MARKER_DIR}
             && (( $(parachute_mtime "${root}/HANDOFF.md") < fired_at )); then
         : > "${MARKER_DIR}/${SESSION_ID}.remind" 2>/dev/null || true
         cat <<EOF
-CONTEXT-PARACHUTE reminder: the handoff was requested earlier (context at ${PERCENT}%), but HANDOFF.md
+CONTEXT-PARACHUTE reminder: the handoff was requested earlier (context at ${DESC}), but HANDOFF.md
 has not been updated since. ${SKILL_ACTION} now, unless the task is about to finish.
 EOF
     fi
@@ -226,7 +236,7 @@ if (( PERCENT >= THRESHOLD )) && (( PARACHUTE_FIRED == 0 )); then
     mkdir -p "$MARKER_DIR" 2>/dev/null || { warn "cannot create marker dir"; exit 0; }
     : > "$MARKER" 2>/dev/null || warn "cannot write marker: $MARKER"
     cat <<EOF
-CONTEXT-PARACHUTE (v${VERSION}): context is at ${PERCENT}% of the ${WINDOW}-token window (threshold ${THRESHOLD}%).
+CONTEXT-PARACHUTE (v${VERSION}): context is at ${DESC} (threshold ${THRESHOLD}%).
 ${SKILL_ACTION} NOW to write the handoff artifacts (HANDOFF.md,
 ${OUTPUT_DIR}/continue.md, ${OUTPUT_DIR}/continue-claude.md, and the AGENTS.md block)
 while context is still fresh — then continue with the user's request.
