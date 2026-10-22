@@ -456,6 +456,12 @@ out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2
 input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-envwin4"}')"
 out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" bash "$WATCH" 2>/dev/null)"
 [[ "$out" == *"~160000 tokens, auto-compact window 200000"* && "$out" != *"% of the"* ]] && ok "compact window is reported as tokens, not a second percentage" || bad "compact window is reported as tokens, not a second percentage (got: ${out:0:80})"
+input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-envwin5"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 bash "$WATCH" 2>/dev/null)"
+[[ "$out" == *"auto-compact window 200000"* ]] && ok "env auto-compact window is reported as tokens" || bad "env auto-compact window is reported as tokens (got: ${out:0:80})"
+input="$(jq -nc --arg t "${FIXTURES}/at-80.jsonl" '{transcript_path:$t, session_id:"s-envwin6"}')"
+out="$(printf '%s' "$input" | TMPDIR="$RUN_TMP" HOME="$RUN_HOME" PARACHUTE_CONTEXT_WINDOW=200000 CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 bash "$WATCH" 2>/dev/null)"
+[[ "$out" == *"80% of the 200000-token window"* ]] && ok "adapter window keeps the percentage even when equal to the compact window" || bad "adapter window keeps the percentage (got: ${out:0:80})"
 rm -f "${RUN_HOME}/.claude/settings.json"
 
 section "PostToolUse delivery (v1.2.0)"

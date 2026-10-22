@@ -118,11 +118,12 @@ load_config "$(pwd)/.parachute/config.json"
 # The settings.json key is the same knob as the env var; without it a lowered
 # autoCompactWindow compacts long before a 1M-based threshold ever fires.
 SETTINGS_WINDOW="$(jq -r '.autoCompactWindow // empty' "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json" 2>/dev/null || true)"
-for env_window in "${PARACHUTE_CONTEXT_WINDOW:-}" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" "$SETTINGS_WINDOW"; do
+for src_window in "adapter:${PARACHUTE_CONTEXT_WINDOW:-}" "compact:${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" "compact:${SETTINGS_WINDOW}"; do
+    env_window="${src_window#*:}"
     if (( ! WINDOW_CONFIGURED )) && [[ "$env_window" =~ ^[1-9][0-9]*$ ]]; then
         WINDOW="$env_window"
         WINDOW_CONFIGURED=1
-        [[ "$env_window" != "${PARACHUTE_CONTEXT_WINDOW:-}" ]] && WINDOW_IS_COMPACT=1
+        [[ "${src_window%%:*}" == "compact" ]] && WINDOW_IS_COMPACT=1
     fi
 done
 [[ "$WINDOW" -gt 0 ]] || { warn "context_window <= 0, using 200000"; WINDOW=200000; }
@@ -167,7 +168,7 @@ PERCENT=$(( TOKENS * 100 / WINDOW ))
 # next to a 35% gauge made the same tokens look like two different numbers.
 # Against the auto-compact window report tokens, not a second percentage.
 if (( WINDOW_IS_COMPACT )); then
-    DESC="~${TOKENS} tokens, auto-compact window ${WINDOW}"
+    DESC="~${TOKENS} tokens, auto-compact window ${WINDOW}, parachute at $(( WINDOW * THRESHOLD / 100 )) tokens"
 else
     DESC="${PERCENT}% of the ${WINDOW}-token window"
 fi

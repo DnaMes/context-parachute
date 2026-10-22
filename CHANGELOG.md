@@ -14,7 +14,7 @@ The top entry here, the `VERSION` file, and the latest git tag always match —
 ### Fixed
 
 - Watcher reads `autoCompactWindow` from `settings.json` as the window fallback (after `CLAUDE_CODE_AUTO_COMPACT_WINDOW`). Before, a lowered window made Claude Code compact at ~21% of 1M while the 65% threshold (650k) never fired.
-- Messages report tokens instead of a percentage when the window is the auto-compact window. The statusline gauge counts the model window (1M), so the same 356k tokens read as "71%" in the watcher and "35%" in the gauge. Trigger logic is unchanged.
+- Messages report tokens instead of a percentage when the window is the auto-compact window. The statusline gauge counts the model window (1M), so the same 356k tokens read as "71%" in the watcher and "35%" in the gauge. The window source is tracked explicitly and the message names the parachute trigger in tokens. Trigger logic is unchanged.
 
 ## [1.4.1] - 2026-10-20
 
