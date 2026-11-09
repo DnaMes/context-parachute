@@ -43,18 +43,25 @@ common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
 
 # ---------------------------------------------------------------- Obsidian ---
 # Only touches frontmatter `updated:` and appends to a "## Push Log" section.
-# Never rewrites prose.
+# Never rewrites prose. Runs detached (see the end), never inside the push.
 update_obsidian() {
     local marker="${repo_root}/.obsidian-doc"
     [[ -f "${marker}" ]] || { log "no .obsidian-doc marker, skipping vault update"; return 0; }
 
-    local vault_dir index today shortlog
+    local vault_dir vault_real index today shortlog home_real
     vault_dir="$(head -n1 "${marker}" | tr -d '\r')"
     vault_dir="${vault_dir/#\~/${HOME}}"
     [[ -d "${vault_dir}" ]] || { log "vault dir not found: ${vault_dir}"; return 0; }
 
-    index="${vault_dir%/}/index.md"
-    [[ -f "${index}" ]] || { log "no index.md in vault, skipping"; return 0; }
+    # The marker lives in the repo, so it is untrusted: write only inside $HOME, after
+    # resolving symlinks and '..'. Anything else is refused, never written.
+    vault_real="$(cd "${vault_dir}" && pwd -P)" || return 0
+    home_real="$(cd "${HOME}" && pwd -P)" || return 0
+    [[ "${vault_real}" == "${home_real}"/* ]] \
+        || { log "vault dir outside HOME, refusing: ${vault_dir}"; return 0; }
+
+    index="${vault_real}/index.md"
+    [[ -f "${index}" && ! -L "${index}" ]] || { log "no index.md in vault, skipping"; return 0; }
 
     today="$(date +%F)"
     shortlog="$(git log -1 --pretty=format:'%h %s' 2>/dev/null)" || shortlog="(unknown)"
@@ -98,13 +105,19 @@ sync_wiki() {
 
     # Deliberately OUTSIDE the repo: a git clone under .git/ is still a git
     # repo on disk, and repo scanners (tools/scan-repos.sh) report it as an
-    # uncatalogued project. Keep the cache in XDG state, keyed by repo name.
-    local wiki_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/wiki-sync/${repo_name}"
+    # uncatalogued project. Keep the cache in XDG state, keyed by repo name and git dir.
+    # Key on the common git dir (absolute path): same-named repos at other paths get
+    # their own cache, worktrees of one repo share theirs. cksum is POSIX everywhere.
+    local key_hash wiki_key wiki_dir
+    key_hash="$(printf '%s' "${common_dir:-${repo_root}}" | cksum | cut -d' ' -f1)"
+    wiki_key="${repo_name}-${key_hash}"
+    wiki_dir="${state_dir}/${wiki_key}"
     if [[ ! -d "${wiki_dir}/.git" ]]; then
-        mkdir -p "$(dirname "${wiki_dir}")" 2>/dev/null || return 0
-        git clone --quiet --depth 1 "${wiki_url}" "${wiki_dir}" 2>/dev/null || {
+        # No rm on failure: git removes the directory it created when a clone fails,
+        # and a cache that already exists is never touched.
+        GIT_TERMINAL_PROMPT=0 timeout 120 git clone --quiet --depth 1 "${wiki_url}" "${wiki_dir}" \
+            </dev/null >/dev/null 2>&1 || {
             log "wiki not initialised or unreachable, skipping: ${wiki_url}"
-            rm -rf "${wiki_dir}"
             return 0
         }
     fi
@@ -116,17 +129,31 @@ sync_wiki() {
     grep -q '^## Push Log' "${home_page}" 2>/dev/null || printf '\n## Push Log\n' >> "${home_page}"
     printf -- '- %s — %s\n' "${now}" "${pushed_refs% }" >> "${home_page}"
 
-    git -C "${wiki_dir}" add -A >/dev/null 2>&1 || return 0
-    git -C "${wiki_dir}" diff --cached --quiet 2>/dev/null && { log "wiki already current"; return 0; }
-    git -C "${wiki_dir}" commit --quiet -m "docs: sync from ${repo_name} push" >/dev/null 2>&1 || return 0
-    if git -C "${wiki_dir}" push --quiet 2>/dev/null; then
+    # Only Home.md is ever staged and committed: a stray file in the cache stays out.
+    git -C "${wiki_dir}" add -- Home.md >/dev/null 2>&1 || return 0
+    git -C "${wiki_dir}" diff --cached --quiet -- Home.md 2>/dev/null && { log "wiki already current"; return 0; }
+    git -C "${wiki_dir}" commit --quiet -m "docs: sync from ${repo_name} push" -- Home.md >/dev/null 2>&1 || return 0
+    if GIT_TERMINAL_PROMPT=0 timeout 120 git -C "${wiki_dir}" push --quiet </dev/null >/dev/null 2>&1; then
         log "wiki updated: ${wiki_url}"
     else
         log "wiki push failed (credentials or not initialised), skipping"
     fi
 }
 
-update_obsidian || log "vault update failed, continuing"
-sync_wiki       || log "wiki sync failed, continuing"
+# ------------------------------------------------------------ detached run ---
+# The sync outlives the hook: git returns at once, and the work runs in the background
+# with its output in a log, never in git's pipes. One lock serialises concurrent pushes,
+# because every repo's vault index and wiki cache are shared state. Without flock
+# (not on stock macOS) nothing is synced rather than written unlocked.
+state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/wiki-sync"
+command -v flock >/dev/null 2>&1 || { log "flock not found, skipping doc sync"; exit 0; }
+mkdir -p "${state_dir}" 2>/dev/null || exit 0
+(
+    exec 9>>"${state_dir}/sync.lock"
+    flock 9
+    update_obsidian || log "vault update failed, continuing"
+    sync_wiki       || log "wiki sync failed, continuing"
+    log "sync finished: ${repo_name}"
+) </dev/null >>"${state_dir}/pre-push.log" 2>&1 &
 
 exit 0   # never block the push
