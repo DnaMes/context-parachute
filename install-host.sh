@@ -4,7 +4,7 @@
 # USAGE: ./install-host.sh [--uninstall|--doctor] <codex|pi|gemini|cursor|agy|all>...
 #
 #   codex   ~/.codex/hooks.json        core hooks directly (same payload as Claude Code)
-#   pi      ~/.pi/agent/extensions/    symlink to integrations/pi/context-parachute.ts
+#   pi      ~/.omp/agent/extensions/   symlink to integrations/pi/context-parachute.ts (omp runtime)
 #   gemini  ~/.gemini/settings.json    parachute-host.sh gemini <event>
 #   cursor  ~/.cursor/hooks.json       parachute-host.sh cursor <event>
 #   agy     ~/.gemini/config/hooks.json  named entry "context-parachute" (passive hook only)
@@ -37,7 +37,7 @@ CODEX_FILE="${CODEX_HOME:-${HOME}/.codex}/hooks.json"
 GEMINI_FILE="${HOME}/.gemini/settings.json"
 CURSOR_FILE="${HOME}/.cursor/hooks.json"
 AGY_FILE="${HOME}/.gemini/config/hooks.json"
-PI_DIR="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}/extensions"
+PI_DIR="${PI_CODING_AGENT_DIR:-${HOME}/.omp/agent}/extensions"  # pi runs on omp since 2026-11-13
 PI_LINK="${PI_DIR}/context-parachute.ts"
 PI_SRC="${REPO_DIR}/integrations/pi/context-parachute.ts"
 

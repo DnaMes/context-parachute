@@ -32,7 +32,7 @@ run_pi() {
   (
     cd "$TMP/project"
     CLAUDE_CONFIG_DIR="$TMP/config" TMPDIR="$TMP/tmp" PARACHUTE_TICK_SECONDS=4000000000 \
-      pi --print --no-extensions -e "$TMP/ext/context-parachute.ts" \
+      omp --print --no-extensions -e "$TMP/ext/context-parachute.ts" \
       --model "$MODEL" --session-dir "$TMP/sessions" "$@"
   )
 }
