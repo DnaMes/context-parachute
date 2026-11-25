@@ -1,7 +1,7 @@
 #!/bin/bash
-# context-parachute — host adapter for Gemini CLI, agy and Cursor.
+# context-parachute — host adapter for Gemini CLI, agy, Cursor and OpenCode.
 #
-# USAGE: parachute-host.sh <gemini|agy|cursor> <EventName>   (hook payload on stdin)
+# USAGE: parachute-host.sh <gemini|agy|cursor|opencode> <EventName>   (hook payload on stdin)
 #
 # WHY: these hosts speak different hook dialects (field names, output shape,
 # events). This shim maps the payload to the Claude-style fields the core hooks
@@ -11,6 +11,7 @@
 #   Gemini CLI  BeforeAgent, AfterTool, PreCompress   -> JSON hookSpecificOutput
 #   agy         PreInvocation                         -> {"injectSteps":[...]}
 #   Cursor      beforeSubmitPrompt, postToolUse, afterAgentResponse, preCompact
+#   OpenCode    context (every model request), compact (session compaction hook)
 #
 # No host except Claude Code and Codex has a post-compaction event that can
 # inject, so the compaction hook leaves a `<sid>.compacted` marker and the next
@@ -38,7 +39,7 @@ finish() { (( RESPONDED )) || empty_response; }
 trap finish EXIT
 
 command -v jq >/dev/null 2>&1 || { warn "jq not found"; exit 0; }
-case "$HOST" in gemini|agy|cursor) ;; *) warn "unknown host: $HOST"; exit 0 ;; esac
+case "$HOST" in gemini|agy|cursor|opencode) ;; *) warn "unknown host: $HOST"; exit 0 ;; esac
 
 IN=""
 [[ -t 0 ]] || IN="$(cat 2>/dev/null || true)"
@@ -63,6 +64,13 @@ case "$HOST" in
         # Cursor transcripts carry no token usage: usage lives in an adapter file.
         TP="${STATE}/cursor-${SID}.usage"
         DEFAULT_WINDOW="" ;;
+    opencode)
+        SID="$(printf '%s' "$IN" | jq -r '.session_id // empty' 2>/dev/null || true)"
+        CWD="$(printf '%s' "$IN" | jq -r '.cwd // empty' 2>/dev/null || true)"
+        # OpenCode keeps sessions in SQLite, not a transcript file: the plugin reports the
+        # last request's usage, recorded in an adapter file (see parachute-lib.sh).
+        TP="${STATE}/opencode-${SID}.usage"
+        DEFAULT_WINDOW="$(printf '%s' "$IN" | jq -r '.context_window // empty' 2>/dev/null || true)" ;;
 esac
 [[ "$SID" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$ ]] || { warn "missing or invalid session id"; exit 0; }
 
@@ -92,6 +100,7 @@ respond() {
         agy:*)    jq -nc --arg t "$text" '{injectSteps:[{ephemeralMessage:$t}]}' ;;
         cursor:beforeSubmitPrompt) jq -nc --arg t "${text:0:9000}" '{continue:true, additional_context:$t}' ;;
         cursor:*) jq -nc --arg t "${text:0:9000}" '{additional_context:$t}' ;;
+        opencode:*) printf '%s\n' "$text" ;;
     esac
 }
 
@@ -137,8 +146,8 @@ prompt_event() {
     local text card watch
     [[ "$HOST" != agy ]] || agy_checkpoint_rearm
     card="$(resume_text)"
-    # agy fires PreInvocation before every model call: throttle unless a card is pending.
-    if [[ "$HOST" == agy && -z "$card" ]] && throttled; then return 0; fi
+    # agy and OpenCode fire before every model call: throttle unless a card is pending.
+    if [[ ( "$HOST" == agy || "$HOST" == opencode ) && -z "$card" ]] && throttled; then return 0; fi
     watch="$(core_payload UserPromptSubmit | bash "${HERE}/parachute-watch.sh" || true)"
     text="$card"
     [[ -z "$watch" ]] || text="${text:+${text}$'\n\n'}${watch}"
@@ -150,29 +159,44 @@ tool_event() {
     respond "$(core_payload UserPromptSubmit | bash "${HERE}/parachute-watch.sh" || true)"
 }
 
+# Record the usage the host reports (Cursor afterAgentResponse, OpenCode context):
+# input + cache read + cache write, as an adapter record (see parachute-lib.sh).
+usage_from_payload() {
+    local t
+    t="$(printf '%s' "$IN" | jq -r '[.input_tokens, (.cache_read_tokens // 0), (.cache_write_tokens // 0)]
+        | if all(.[]; type == "number" and . >= 0) then add else empty end' 2>/dev/null || true)"
+    if [[ "$t" =~ ^[0-9]+$ ]] && mkdir -p "$STATE" 2>/dev/null; then
+        printf '{"parachute_usage":{"t":%s,"w":0}}\n' "$t" >> "$TP" 2>/dev/null || true
+        if [[ "$(wc -l < "$TP" 2>/dev/null || echo 0)" -gt 200 ]]; then
+            tail -n 50 "$TP" > "${TP}.tmp" 2>/dev/null && mv -f -- "${TP}.tmp" "$TP" 2>/dev/null || true
+        fi
+    fi
+}
+
+# Compaction: snapshot (auto only), mark earlier usage stale, arm the resume card.
+compact_event() {
+    mkdir -p "$STATE" 2>/dev/null || true
+    run_precompact "$(printf '%s' "$IN" | jq -r '.trigger // "auto"' 2>/dev/null || echo auto)"
+    printf '{"type":"compacted"}\n' >> "$TP" 2>/dev/null || true
+    : > "$MARKER" 2>/dev/null || true
+}
+
+
 case "$HOST:$EVENT" in
     gemini:BeforeAgent|agy:PreInvocation|cursor:beforeSubmitPrompt) prompt_event ;;
     gemini:AfterTool|cursor:postToolUse) tool_event ;;
     gemini:PreCompress)
         run_precompact "$(printf '%s' "$IN" | jq -r '.trigger // "auto"' 2>/dev/null || echo auto)"
         mkdir -p "$STATE" 2>/dev/null && : > "$MARKER" 2>/dev/null || true ;;
-    cursor:afterAgentResponse)
-        t="$(printf '%s' "$IN" | jq -r '[.input_tokens, (.cache_read_tokens // 0), (.cache_write_tokens // 0)]
-            | if all(.[]; type == "number" and . >= 0) then add else empty end' 2>/dev/null || true)"
-        if [[ "$t" =~ ^[0-9]+$ ]] && mkdir -p "$STATE" 2>/dev/null; then
-            printf '{"parachute_usage":{"t":%s,"w":0}}\n' "$t" >> "$TP" 2>/dev/null || true
-            if [[ "$(wc -l < "$TP" 2>/dev/null || echo 0)" -gt 200 ]]; then
-                tail -n 50 "$TP" > "${TP}.tmp" 2>/dev/null && mv -f -- "${TP}.tmp" "$TP" 2>/dev/null || true
-            fi
-        fi ;;
+    cursor:afterAgentResponse) usage_from_payload ;;
+    # usage the host reports right after a compaction predates it: skip it until the card is delivered
+    opencode:context) [[ -e "$MARKER" ]] || usage_from_payload; prompt_event ;;
     cursor:preCompact)
         w="$(printf '%s' "$IN" | jq -r '.context_window_size | select(type == "number" and . > 0 and . == floor)' 2>/dev/null || true)"
         mkdir -p "$STATE" 2>/dev/null || true
         [[ -z "$w" ]] || printf '%s\n' "$w" > "$WINDOW_FILE" 2>/dev/null || true
-        run_precompact "$(printf '%s' "$IN" | jq -r '.trigger // "auto"' 2>/dev/null || echo auto)"
-        # Usage before the compaction is stale; the next afterAgentResponse starts afresh.
-        printf '{"type":"compacted"}\n' >> "$TP" 2>/dev/null || true
-        : > "$MARKER" 2>/dev/null || true ;;
+        compact_event ;;
+    opencode:compact) compact_event ;;
     *) ;;
 esac
 exit 0
