@@ -639,7 +639,7 @@ out="$(tres)"; [[ "$out" == *"CLAUDE"* ]] && ok "resume default tool is claude" 
 rm -rf "$tr_dir"
 
 # ---------------------------------------------------------------------------
-section "Host adapter: Gemini CLI, agy, Cursor (v1.4.0)"
+section "Host adapter: Gemini CLI, agy, Cursor, OpenCode (v1.4.0)"
 HOST_SH="${REPO_DIR}/hooks/parachute-host.sh"
 hs_dir="$(mktemp -d)"; mkdir -p "${hs_dir}/.parachute"; printf 'HOSTCARD\n' > "${hs_dir}/.parachute/continue.md"
 hs() { # host event json
@@ -670,6 +670,16 @@ hs cursor preCompact "$(cj hs-c1 190000)" >/dev/null
 [[ "$(cat "${RUN_TMP}/context-parachute/cursor-hs-c1.window" 2>/dev/null)" == "200000" && -e "${RUN_TMP}/context-parachute/hs-c1.compacted" ]] \
     && ok "cursor preCompact stores the window and the compacted marker" || bad "cursor preCompact bookkeeping"
 out="$(hs cursor beforeSubmitPrompt "$(cj hs-c1)")"; [[ "$(jq -r '.additional_context' <<<"$out" 2>/dev/null)" == *"resume card"* ]] && ok "cursor resume card after preCompact" || bad "cursor resume card (got: ${out:0:100})"
+oj() { jq -nc --arg c "$hs_dir" --arg s "$1" --argjson n "${2:-0}" '{session_id:$s, cwd:$c, input_tokens:$n, cache_read_tokens:0, cache_write_tokens:0, context_window:200000}'; }
+out="$(hs opencode context "$(oj hs-o1)")"; [[ -z "$out" ]] && ok "opencode context without usage or card prints nothing" || bad "opencode quiet context (got: ${out:0:60})"
+hs opencode context "$(oj hs-o1 190000)" >/dev/null
+[[ "$(tail -n1 "${RUN_TMP}/context-parachute/opencode-hs-o1.usage" 2>/dev/null)" == '{"parachute_usage":{"t":190000,"w":0}}' ]] \
+    && ok "opencode context records the reported usage in the adapter file" || bad "opencode usage record"
+out="$(hs opencode context "$(oj hs-o1 190000)")"; [[ -z "$out" ]] && ok "opencode context is throttled without a pending card" || bad "opencode throttle (got: ${out:0:60})"
+hs opencode compact "$(jq -nc --arg c "$hs_dir" '{session_id:"hs-o1", cwd:$c, trigger:"auto"}')" >/dev/null
+[[ -e "${RUN_TMP}/context-parachute/hs-o1.compacted" && -e "${hs_dir}/.parachute/emergency.md" ]] \
+    && ok "opencode compact: snapshot and compacted marker" || bad "opencode compact bookkeeping"
+out="$(hs opencode context "$(oj hs-o1)")"; [[ "$out" == *"HOSTCARD"* ]] && ok "opencode resume card is printed as plain text after compaction" || bad "opencode resume card (got: ${out:0:100})"
 out="$(hs gemini BeforeAgent 'garbage')"; [[ "$out" == "{}" ]] && ok "host adapter fails open with valid JSON on garbage input" || bad "host adapter garbage input (got: ${out:0:60})"
 rm -rf "$hs_dir"
 
